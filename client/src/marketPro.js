@@ -1,35 +1,13 @@
 // Panel de mercado PRO — todo calculado en el navegador con los datos
-// que ya trae /api/markets. NADA de esto es un dato oficial de un
-// proveedor: son aproximaciones propias y así se etiquetan en la UI.
-//
-// - Capitalización total aproximada: suma de precio × volumen 24h por
-//   activo. NO es la capitalización real (que sería precio × oferta en
-//   circulación, dato que las APIs gratuitas no nos dan en este endpoint).
-//   Sirve como proxy del tamaño relativo del mercado entre las 10.
-// - Dominio de BTC: parte de BTC en ese proxy. Etiquetado "aprox.".
+// que ya trae /api/markets, SALVO la capitalización total y el dominio
+// de BTC, que ahora vienen de /api/global (CoinGecko, dato real).
+// El proxy precio × volumen 24h SE ELIMINÓ en v9: no es capitalización
+// (sería precio × oferta en circulación) y daba cifras absurdas
+// ("$0.4 mil M"). Si CoinGecko falla (429), la app muestra
+// "no disponible" en vez de inventar un número.
 // - Índice de miedo y codicia: ESTIMADO PROPIO a partir de las 10
 //   criptos (amplitud, impulso medio y RSI del activo seleccionado).
 //   NO es el índice oficial de alternative.me. Solo orienta el ánimo.
-
-export function marketCapProxy(markets) {
-  if (!markets || !markets.length) return null;
-  let total = 0, count = 0;
-  for (const m of markets) {
-    if (m.price != null && m.volume24h != null && m.volume24h > 0) {
-      total += m.price * m.volume24h;
-      count += 1;
-    }
-  }
-  return count ? total : null;
-}
-
-export function btcDominanceProxy(markets) {
-  if (!markets || !markets.length) return null;
-  const total = marketCapProxy(markets);
-  const btc = markets.find((m) => m.symbol === 'BTC');
-  if (!total || !btc || btc.price == null || btc.volume24h == null) return null;
-  return ((btc.price * btc.volume24h) / total) * 100;
-}
 
 // Índice de miedo y codicia ESTIMADO (0-100) con las 10 criptos.
 // Componentes: amplitud (% que suben), impulso medio 24h y RSI.

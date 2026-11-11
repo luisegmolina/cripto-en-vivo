@@ -112,3 +112,43 @@ h3 { margin: 12px 0 4px; font-size: 15px; }
 .reason-neutral { background: rgba(148,163,184,.10); border: 1px solid rgba(148,163,184,.4); }
 .plan-stats div b { font-size: 17px; }
 .mtf-table td, .mtf-table th { font-size: 15px; }
+.screener-rest { list-style: none; padding: 0; }
+.screener-rest li { margin: 6px 0; cursor: pointer; opacity: .75; }
+.screener-rest li:hover { opacity: 1; }
+.tech-details { margin-top: 10px; }
+.tech-details summary { cursor: pointer; color: #94a3b8; font-size: 14px; }
+
+/* --- v9: IMPRESIÓN / PDF ---
+   La impresión del 10-nov salía rota: texto solapado, letras en
+   vertical, secciones que se montaban unas sobre otras. Causas:
+   fondo oscuro + animación del ticker tape + tarjetas en rejilla
+   (grid) que el motor de PDF no pagina bien. Reglas:
+   - Una sola columna, fondo blanco, texto negro, sin animaciones.
+   - Sin ticker tape, sin gráficos de velas (canvas), sin sparklines.
+   - Las secciones de liga/misiones/logros/compartir no se imprimen
+     (son juego local, no información de trading).
+   - Sin fondos degradados ni bordes de color que se rompan al paginar. */
+@media print {
+  @page { size: A4; margin: 12mm; }
+  body { background: #fff !important; color: #000 !important; }
+  .app { max-width: 100% !important; margin: 0 !important; padding: 0 !important; }
+  .tape, .chart, .rsi-chart, .spark, .tape-track { display: none !important; }
+  .card, .verdict-card, .stats div, .reason-up, .reason-down, .reason-neutral,
+  .conflict-banner, .warn, .signal, .ach, .heat-cell, .winner {
+    background: #fff !important; border: 1px solid #999 !important; color: #000 !important;
+    break-inside: avoid; page-break-inside: avoid;
+  }
+  .card { margin-top: 10px !important; padding: 10px !important; border-radius: 0 !important; }
+  .verdict-word { font-size: 36px !important; color: #000 !important; }
+  .verdict-buy .verdict-word, .verdict-sell .verdict-word, .verdict-wait .verdict-word { color: #000 !important; }
+  .up, .down, .flash.up, .flash.down, .streak { color: #000 !important; }
+  .muted, .verdict-kicker, footer { color: #333 !important; }
+  .big { font-size: 28px !important; color: #000 !important; }
+  .score-bar, .mood-bar { display: none !important; }
+  button, .btn-link, input, select { display: none !important; }
+  /* Secciones de juego local: no se imprimen (se solapaban en el PDF). */
+  .no-print { display: none !important; }
+  h1, h2, h3 { color: #000 !important; break-after: avoid; }
+  table { break-inside: avoid; }
+  * { animation: none !important; transition: none !important; }
+}

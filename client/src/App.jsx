@@ -2,11 +2,12 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createChart, LineStyle } from 'lightweight-charts';
 import { analyze, emaSeries, bollingerSeries, rsiSeries } from './analysis.js';
 import { updateLastCandle, candlesSignature, mergeServerCandles } from './liveCandle.js';
-import { marketCapProxy, btcDominanceProxy, fearGreedEstimate, heatToday, isoWeekKey, rivalsForWeek } from './marketPro.js';
+import { fearGreedEstimate, heatToday, isoWeekKey, rivalsForWeek } from './marketPro.js';
 import { backtestSignal } from './backtest.js';
 import { multiTfVerdict, reasonsFor, tradePlan, signalHistory, VERDICT_TFS } from './verdict.js';
 import { MISSIONS, levelForXp, xpIntoLevel, XP_PER_LEVEL } from './missions.js';
 import { screenOpportunities } from './screener.js';
+import { shouldFireAlert, ALERT_COOLDOWN_MS } from './alerts.js';
 import { shareText, whatsappUrl, drawShareCard, APP_URL } from './shareCard.js';
 
 const ASSETS = [
@@ -19,7 +20,7 @@ const ASSETS = [
 const INTERVALS = ['1m', '5m', '15m', '1h', '6h', '1d'];
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v8 — Señal de trading al frente: COMPRAR / VENDER / ESPERAR';
+const VERSION_LABEL = 'v9 — Señal al frente, sin entrada si es ESPERAR';
 
 const ACHIEVEMENTS = [
   { id: 'primera_operacion', name: 'Primera operación virtual', desc: 'Compra o vende por primera vez con dinero virtual.' },
@@ -116,7 +117,10 @@ export default function App() {
   // Antes se llamaba [interval, setInterval] y eso eclipsaba el
   // setInterval global y causaba el bucle "Maximum update depth exceeded".
   // Nunca nombrar un setter setInterval.
-  const [candleInterval, setCandleInterval] = useState('1m');
+  // v9: el intervalo por defecto es 1h, no 1m. El 1m es ruido: la señal
+  // acierta poco ahí (en la medición del 10-nov, BTC 1m acertó 2 de 10)
+  // y el historial/backtest con 1m ponían el peor ejemplo al frente.
+  const [candleInterval, setCandleInterval] = useState('1h');
   const [markets, setMarkets] = useState([]);
   const [ticker, setTicker] = useState(null);
   const [candles, setCandles] = useState([]);
@@ -176,6 +180,12 @@ export default function App() {
   const [sparkHist, setSparkHist] = useState({});
   const priceAlertsRef = useRef(priceAlerts);
   priceAlertsRef.current = priceAlerts;
+  // v9: anti-duplicados de alertas. Cada alerta que suena queda anotada
+  // por clave símbolo|moneda|dirección|precio con su hora; si el mismo
+  // precio vuelve a cruzarse antes de 1 h, NO vuelve a sonar ni a
+  // duplicarse en la lista (en el PDF del 10-nov la misma alerta de
+  // $73.53 sonó 4 veces). Persistido en localStorage.
+  const alertCooldownRef = useRef(loadLS('cev_alert_cooldown_v1', {}));
 
   // --- Perfil local (sin login, sin servidor): solo un apodo ---
   const [nickname, setNickname] = useState(() => (loadLS('cev_profile_v1', {}).nickname || ''));
@@ -202,7 +212,7 @@ export default function App() {
   });
 
   // --- Screener / compartir ---
-  const [screenRows, setScreenRows] = useState([]);
+  const [screenRows, setScreenRows] = useState({ opportunities: [], rest: [] });
   const [screenLoading, setScreenLoading] = useState(false);
   const [screenError, setScreenError] = useState('');
   const [screenUpdatedAt, setScreenUpdatedAt] = useState('');
@@ -282,13 +292,35 @@ export default function App() {
   }, [mtfCandles, candles, candleInterval]);
   const mtfVerdict = useMemo(() => multiTfVerdict(mtfAnalysis), [mtfAnalysis]);
   const verdictReasons = useMemo(() => reasonsFor(analysis), [analysis]);
-  const plan = useMemo(() => tradePlan(priceNowForPlan(), candles), [ticker, candles, mtfVerdict.verdict.key]);
+  const plan = useMemo(() => tradePlan(priceNowForPlan(), candles, mtfVerdict.verdict.key), [ticker, candles, mtfVerdict.verdict.key]);
   const histSignals = useMemo(() => signalHistory(candles, 10), [lastCandleKey]); // eslint-disable-line react-hooks/exhaustive-deps
   function priceNowForPlan() {
     return ticker?.price ?? markets.find((m) => m.symbol === symbol)?.price ?? null;
   }
-  const capProxy = useMemo(() => marketCapProxy(markets), [markets]);
-  const btcDom = useMemo(() => btcDominanceProxy(markets), [markets]);
+  // v9: capitalización total y dominio de BTC REALES, de /api/global
+  // (CoinGecko). Se refrescan cada 5 min. Si CoinGecko falla o da 429,
+  // globalData queda en null y la UI muestra "No disponible", nunca un
+  // número inventado (el proxy precio × volumen se eliminó).
+  const [globalData, setGlobalData] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const g = await api('/api/global');
+        if (alive && g && g.available) setGlobalData(g);
+        else if (alive) setGlobalData(null);
+      } catch { if (alive) setGlobalData(null); }
+    };
+    load();
+    const t = setInterval(load, 300000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  const capText = globalData && globalData.totalMarketCapUsd
+    ? `$${(globalData.totalMarketCapUsd / 1e12).toFixed(2)} billones`
+    : 'No disponible';
+  const domText = globalData && globalData.btcDominance != null
+    ? `${Number(globalData.btcDominance).toFixed(1)}%`
+    : 'No disponible';
   const fearGreed = useMemo(() => fearGreedEstimate(markets, analysis.rsi), [markets, analysis.rsi]);
   const heat = useMemo(() => heatToday(markets), [markets]);
 
@@ -424,11 +456,21 @@ export default function App() {
   useEffect(() => {
     if (!ticker || ticker.price == null) return;
     const price = ticker.price;
+    const nowMs = Date.now();
     let fired = false;
     const next = priceAlertsRef.current.map((a) => {
       if (a.triggered || a.symbol !== symbol || a.currency !== currency) return a;
       const hit = a.direction === 'above' ? price >= a.target : price <= a.target;
       if (!hit) return a;
+      // v9: cooldown de 1 h por precio objetivo (ver alerts.js): si esta
+      // misma alerta ya sonó hace menos de 1 h, se marca como sonada
+      // pero NO vuelve a sonar ni a duplicarse en la lista de alertas.
+      const res = shouldFireAlert(alertCooldownRef.current, a, nowMs);
+      if (!res.fire) {
+        return { ...a, triggered: true, triggeredAt: new Date().toISOString() };
+      }
+      alertCooldownRef.current = res.map;
+      saveLS('cev_alert_cooldown_v1', alertCooldownRef.current);
       fired = true;
       const msg = `🔔 ${a.symbol}: llegó a ${fmt(price, currency)} (${a.direction === 'above' ? 'por encima de' : 'por debajo de'} ${fmt(a.target, currency)}) — ${new Date().toLocaleTimeString('es-US')}`;
       setAlerts((prev) => [msg, ...prev].slice(0, 20));
@@ -602,7 +644,7 @@ export default function App() {
       const h = await api('/api/health');
       const ms = Date.now() - t0;
       setServerStatus('OK — responde');
-      setTestResult(`✅ Servidor OK en ${ms} ms: ${JSON.stringify(h)}`);
+      setTestResult(`✅ Servidor OK en ${ms} ms`);
     } catch (e) {
       setServerStatus('FALLO — no responde');
       setTestResult(`❌ Servidor NO responde: ${e.message || e}. ¿Corriste "npm run dev" en la carpeta raíz? ¿Dice la terminal "servidor en http://localhost:3001"?`);
@@ -724,6 +766,10 @@ export default function App() {
   const addPriceAlert = () => {
     const target = Number(alertTarget);
     if (!target || target <= 0) { setPaperMsg('Pon un precio objetivo mayor que 0 para la alerta.'); return; }
+    // v9: no crear la misma alerta dos veces. Si ya existe una activa
+    // con el mismo activo, moneda, dirección y precio, no se duplica.
+    const dup = priceAlerts.some((a) => !a.triggered && a.symbol === symbol && a.currency === currency && a.direction === alertDir && Number(a.target) === target);
+    if (dup) { setPaperMsg(`Ya tienes esa alerta activa: ${symbol} ${alertDir === 'above' ? 'por encima de' : 'por debajo de'} ${fmt(target, currency)}. No se creó otra igual.`); return; }
     const alert = { id: Date.now(), symbol, currency, target, direction: alertDir, createdAt: new Date().toISOString(), triggered: false };
     setPriceAlerts((prev) => [alert, ...prev].slice(0, 20));
     unlock('primera_alerta');
@@ -902,13 +948,22 @@ export default function App() {
         <h3>Plan de operación — sugerido, educativo</h3>
         {plan ? (
           <div>
-            <div className="stats plan-stats">
-              <div><span>Entrada sugerida</span><b>{plan.entry ? fmt(plan.entry, currency) : 'Sin entrada: ESPERAR'}</b></div>
-              <div><span>Stop loss sugerido</span><b>{fmt(plan.stopLoss, currency)}</b></div>
-              <div><span>Take profit sugerido</span><b>{fmt(plan.takeProfit, currency)}</b></div>
-              <div><span>Ratio riesgo/beneficio</span><b>1 : {plan.rr}</b></div>
-            </div>
-            <p className="muted">{plan.note} Stop a 1 ATR ({fmt(plan.atr, currency)}) y objetivo a 2 ATR, calculados con la volatilidad real de las últimas 14 velas. Esto es un ejemplo educativo con dinero virtual: si operas con dinero real, el riesgo es tuyo y puedes perderlo todo.</p>
+            {plan.entry ? (
+              <div className="stats plan-stats">
+                <div><span>Entrada sugerida</span><b>{fmt(plan.entry, currency)}</b></div>
+                <div><span>Stop loss sugerido</span><b>{fmt(plan.stopLoss, currency)}</b></div>
+                <div><span>Take profit sugerido</span><b>{fmt(plan.takeProfit, currency)}</b></div>
+                <div><span>Ratio riesgo/beneficio</span><b>1 : {plan.rr}</b></div>
+              </div>
+            ) : (
+              <div className="stats plan-stats">
+                <div><span>Entrada sugerida</span><b>Sin entrada</b></div>
+                <div><span>Se activa si sube a</span><b>{fmt(plan.activationUp, currency)}</b></div>
+                <div><span>Se activa si baja a</span><b>{fmt(plan.activationDown, currency)}</b></div>
+                <div><span>Volatilidad (ATR)</span><b>{fmt(plan.atr, currency)}</b></div>
+              </div>
+            )}
+            <p className="muted">{plan.note} {plan.entry ? `Stop a 1 ATR (${fmt(plan.atr, currency)}) y objetivo a 2 ATR, calculados con la volatilidad real de las últimas 14 velas.` : `Los niveles de activación están a 1 ATR (${fmt(plan.atr, currency)}) del precio actual: si el precio los rompe con señal clara, ahí se activa el plan.`} Esto es un ejemplo educativo con dinero virtual: si operas con dinero real, el riesgo es tuyo y puedes perderlo todo.</p>
             <div className="row">
               <button onClick={() => { if (mtfVerdict.verdict.key === 'buy') doTrade('buy'); else if (mtfVerdict.verdict.key === 'sell') doTrade('sell'); else setPaperMsg('El veredicto es ESPERAR: no hay operación sugerida ahora.'); }}>Operar según la señal (virtual)</button>
               <button onClick={() => { setAlertTarget(String(Math.round((ticker?.price || 0) * (mtfVerdict.verdict.key === 'sell' ? 0.98 : 1.02)))); setPaperMsg('Precio objetivo puesto en el formulario de alertas de abajo: complétalo y pulsa "Añadir alerta".'); }}>Crear alerta de este precio</button>
@@ -938,6 +993,7 @@ export default function App() {
       <section className="card">
         <h2>📜 Historial de señales — {symbol} ({candleInterval})</h2>
         <p className="muted">Las últimas señales claras y lo que pasó en la vela siguiente. Si la señal decía COMPRAR y el precio subió, cuenta como acierto. El pasado no predice el futuro.</p>
+        {candleInterval === '1m' && <p className="warn">⚠️ Estás viendo velas de 1 minuto: 1m es ruido, no apto para decidir. La señal cambia a cada segundo y acierta poco (BTC 1m acertó 2 de 10 en la medición del 10-nov). Para decidir, usa 1h.</p>}
         {histSignals.length > 0 ? (
           <table className="league-table">
             <thead><tr><th>Hora</th><th>Señal</th><th>Precio</th><th>Después</th><th>Resultado</th></tr></thead>
@@ -1014,6 +1070,7 @@ export default function App() {
       <section className="card">
         <h2>🧪 Backtest de señales — {symbol} ({candleInterval})</h2>
         <p className="warn">⚠️ Prueba educativa sobre velas pasadas. Que una señal acertara antes NO significa que acierte mañana. Sin promesas.</p>
+        {candleInterval === '1m' && <p className="warn">⚠️ Backtest en 1 minuto: 1m es ruido, no apto para decidir. El backtest por defecto es 1h, donde la señal acierta más.</p>}
         {backtest.total > 0 ? (
           <div>
             <p className="big-backtest">La señal acertó <b>{backtest.wins} de {backtest.total}</b> veces ({backtest.pct}%)</p>
@@ -1032,25 +1089,41 @@ export default function App() {
       {/* Screener / Oportunidades del día */}
       <section className="card">
         <h2>🔍 Oportunidades del día</h2>
-        <p className="muted">Las 10 criptos ordenadas por RSI, cambio 24h, volumen y puntuación de señal (velas de 1h). Toca "Actualizar" para calcularlo con datos frescos.</p>
+        <p className="muted">Solo cuentan como oportunidad las señales CLARAS (puntuación ≥ 25 de compra o ≤ −25 de venta, velas de 1h). Las débiles van abajo como "sin oportunidad clara", sin número. Toca "Actualizar" para calcularlo con datos frescos.</p>
         <div className="row">
           <button onClick={runScreener} disabled={screenLoading}>{screenLoading ? 'Calculando…' : 'Actualizar screener'}</button>
           {screenUpdatedAt && <span className="muted">Actualizado a las {screenUpdatedAt}</span>}
         </div>
         {screenError && <p className="errtext">{screenError}</p>}
-        {screenRows.length > 0 && (
+        {screenRows.opportunities.length > 0 ? (
           <ol className="screener">
-            {screenRows.map((r, i) => (
+            {screenRows.opportunities.map((r, i) => (
               <li key={r.symbol} onClick={() => setSymbol(r.symbol)} title="Toca para ver su gráfico">
                 <b>#{i + 1} {r.symbol}</b> — {r.price ? fmt(r.price, currency) : '—'}
                 <span className={r.change24h >= 0 ? 'up' : 'down'}> {r.change24h >= 0 ? '+' : ''}{r.change24h.toFixed(2)}% 24h</span>
                 <span className="muted"> · RSI {r.rsi != null ? r.rsi.toFixed(0) : '—'} · señal {r.score != null ? r.score : '—'} · {r.points} pts</span>
-                <br /><span className="muted">{r.reason}</span>
+                <br /><span className="muted">{r.opportunity === 'buy' ? '▲ Oportunidad de compra: ' : '▼ Oportunidad de venta: '}{r.reason}</span>
               </li>
             ))}
           </ol>
+        ) : (
+          screenRows.rest.length > 0 && <p className="muted">Hoy no hay oportunidades claras: ninguna señal llega a ±25. Abajo, las débiles.</p>
         )}
-        {screenRows.length === 0 && !screenLoading && <p className="muted">Todavía no hay screener: pulsa "Actualizar screener".</p>}
+        {screenRows.rest.length > 0 && (
+          <div>
+            <h3>Sin oportunidad clara</h3>
+            <ul className="screener-rest">
+              {screenRows.rest.map((r) => (
+                <li key={r.symbol} onClick={() => setSymbol(r.symbol)} title="Toca para ver su gráfico">
+                  <b>{r.symbol}</b> — {r.price ? fmt(r.price, currency) : '—'}
+                  <span className={r.change24h >= 0 ? 'up' : 'down'}> {r.change24h >= 0 ? '+' : ''}{r.change24h.toFixed(2)}% 24h</span>
+                  <span className="muted"> · RSI {r.rsi != null ? r.rsi.toFixed(0) : '—'} · señal {r.score != null ? r.score : '—'} · {r.reason}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {screenRows.opportunities.length === 0 && screenRows.rest.length === 0 && !screenLoading && <p className="muted">Todavía no hay screener: pulsa "Actualizar screener".</p>}
       </section>
 
       {/* Cartera virtual */}
@@ -1089,7 +1162,7 @@ export default function App() {
       </section>
 
       {/* Liga semanal (demo/local) */}
-      <section className="card">
+      <section className="card no-print">
         <h2>🏆 Liga semanal — {weekKey}</h2>
         <p className="warn">⚠️ Liga DEMO y local: tus rivales son jugadores simulados de ejemplo (no personas reales ni cuentas) y tu puesto vive solo en este navegador. Todos empiezan el lunes con $10.000 virtuales; la liga se reinicia cada lunes.</p>
         {weekWinner && (
@@ -1111,7 +1184,7 @@ export default function App() {
       </section>
 
       {/* Liga privada con código */}
-      <section className="card">
+      <section className="card no-print">
         <h2>🔐 Liga privada con código</h2>
         <p className="muted">Crea una liga con un código y compártelo con tus amigos, o únete con un código que te den. Es local/demo: la liga y sus miembros solo existen en este navegador; no hay cuentas ni servidor de ligas.</p>
         {privateLeague ? (
@@ -1131,7 +1204,7 @@ export default function App() {
       </section>
 
       {/* Misiones diarias y XP */}
-      <section className="card">
+      <section className="card no-print">
         <h2>🎯 Misiones diarias y XP — Nivel {level}</h2>
         <p className="muted">XP total: <b>{xpTotal}</b> · Nivel {level} · {xpInLevel}/{XP_PER_LEVEL} XP para el nivel {level + 1} · Hoy llevas {missionsDoneToday} de {MISSIONS.length} misiones.</p>
         <div className="score-bar" aria-hidden="true"><div style={{ width: `${(xpInLevel / XP_PER_LEVEL) * 100}%`, background: '#f59e0b' }} /></div>
@@ -1145,7 +1218,7 @@ export default function App() {
       </section>
 
       {/* Compartir por WhatsApp */}
-      <section className="card">
+      <section className="card no-print">
         <h2>📣 Compartir mi semana por WhatsApp</h2>
         <p className="muted">Comparte tu P&L virtual de la semana, tu puesto en la liga y tu mejor operación. Solo se comparte lo que tú pulses; nada sale solo de tu navegador.</p>
         <div className="row">
@@ -1180,7 +1253,7 @@ export default function App() {
       </section>
 
       {/* Logros */}
-      <section className="card">
+      <section className="card no-print">
         <h2>🏆 Logros y racha</h2>
         <p className="muted">Todo queda solo en tu navegador. Racha actual: <b>{streak.days} día{streak.days === 1 ? '' : 's'}</b>.</p>
         <div className="achievements">
@@ -1193,7 +1266,7 @@ export default function App() {
       </section>
 
       {/* Perfil local: apodo sin cuentas */}
-      <section className="card profile">
+      <section className="card profile no-print">
         <h2>👤 Tu perfil local {nickname ? `— ${nickname}` : ''}</h2>
         <p className="muted">Sin registro ni contraseña: solo un apodo guardado en este navegador, que se usa en la liga semanal y en la tarjeta para compartir. Nada se envía a ningún servidor.</p>
         <div className="row">
@@ -1208,12 +1281,12 @@ export default function App() {
       <section className="card">
         <h2>📊 Panel de mercado PRO</h2>
         <div className="stats">
-          <div><span>Dominio de BTC (aprox.)</span><b>{btcDom != null ? `${btcDom.toFixed(1)}%` : '—'}</b></div>
-          <div><span>Capitalización total (aprox.)</span><b>{capProxy != null ? `${CUR[currency]}${(capProxy / 1e9).toFixed(1)} mil M` : '—'}</b></div>
+          <div><span>Dominio de BTC (CoinGecko)</span><b>{domText}</b></div>
+          <div><span>Capitalización total (CoinGecko)</span><b>{capText}</b></div>
           <div><span>Miedo y codicia (estimado propio)</span><b style={{ color: fgColor }}>{fearGreed ? `${fearGreed.value} / 100 · ${fearGreed.label}` : '—'}</b></div>
           <div><span>Qué está caliente hoy</span><b className={heat.length && heat[0].change24h >= 0 ? 'up' : 'down'}>{heat.length ? `▲ ${heat[0].symbol} +${heat[0].change24h.toFixed(2)}%` : '—'}</b></div>
         </div>
-        <p className="muted">Dominio y capitalización son un proxy calculado aquí con precio × volumen 24h de las 10 criptos — NO son los datos oficiales de capitalización (precio × oferta en circulación). El índice de miedo y codicia es un estimado propio con amplitud, impulso y RSI; NO es el índice oficial de alternative.me.</p>
+        <p className="muted">Capitalización total y dominio de BTC: datos reales de CoinGecko (servidor, /api/global, se refresca cada 5 min). Si CoinGecko está en pausa por límite (429), se muestra "No disponible" en vez de un número inventado. El índice de miedo y codicia es un estimado propio con amplitud, impulso y RSI; NO es el índice oficial de alternative.me.</p>
         {heat.length > 0 && (
           <div className="heatmap" aria-label="Mapa de calor de las 10 criptos">
             {heat.map((m) => {
@@ -1260,10 +1333,15 @@ export default function App() {
         )}
         <div className="row">
           <button onClick={testServer}>Probar servidor</button>
-          <span className="muted">Llama a /api/health y a /api/debug y muestra el resultado aquí.</span>
+          <span className="muted">Comprueba que el servidor responde y de dónde viene el precio.</span>
         </div>
         {testResult && <p className="errtext">{testResult}</p>}
-        {debugInfo && <pre className="errtext">{debugInfo}</pre>}
+        {(debugInfo || testResult) && (
+          <details className="tech-details">
+            <summary>Detalles técnicos (para diagnosticar)</summary>
+            {debugInfo ? <pre className="errtext">{debugInfo}</pre> : <p className="muted">Pulsa "Probar servidor" para ver el estado de cada fuente (Coinbase, Kraken, Binance US, CoinGecko).</p>}
+          </details>
+        )}
       </section>
 
 

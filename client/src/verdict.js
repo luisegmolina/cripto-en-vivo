@@ -122,8 +122,13 @@ export function tradePlan(price, candles, verdictKey) {
   if (verdictKey === 'sell') {
     return { entry: price, stopLoss: price + slDist, takeProfit: price - tpDist, rr: 2, dir: 'sell', atr: a, note: 'Venta sugerida (educativo): stop 1 ATR arriba, objetivo 2 ATR abajo.' };
   }
+  // ESPERAR: NO hay entrada, ni stop, ni objetivo. Solo los niveles de
+  // activación (romper uno con señal clara activaría el plan). Mostrar
+  // un stop/take profit con veredicto ESPERAR es confuso y engañoso.
   return {
-    entry: null, stopLoss: price - slDist, takeProfit: price + tpDist, rr: 2, dir: 'wait', atr: a,
+    entry: null, stopLoss: null, takeProfit: null,
+    activationUp: price + slDist, activationDown: price - slDist,
+    rr: 2, dir: 'wait', atr: a,
     note: 'Sin entrada por ahora: el plan se activa si el precio rompe un nivel con señal clara.',
   };
 }

@@ -32,3 +32,20 @@ Fecha: 2026-11-11
   Página reordenada: veredicto primero, gráfico después, resto después.
   Nada de v7 se quitó. Todo dinero VIRTUAL, prueba educativa, sin
   recomendación de inversión ni garantía de ganancias.
+
+- v9 (2026-11-11): CORRECCIONES DEL PDF. (1) Con ESPERAR no hay
+  entrada ni stop ni objetivo: solo "Sin entrada" + niveles de
+  activación a 1 ATR (también se corrigió que tradePlan se llamaba sin
+  el veredicto). (2) Intervalo por defecto 1h (no 1m, que es ruido:
+  BTC 1m 2/10); aviso "1m es ruido, no apto para decidir" al usar 1m.
+  (3) Capitalización total REAL de CoinGecko vía /api/global (caché
+  5 min); si falla, "No disponible", nunca un número inventado; el
+  proxy precio × volumen se eliminó. (4) Alertas: una suena UNA vez y
+  cooldown de 1 h por precio objetivo (alerts.js, probado); no se
+  puede crear la misma alerta dos veces. (5) Debug del servidor
+  detrás de "Detalles técnicos" plegado; solo "Servidor OK" visible.
+  (6) Screener: solo señales claras |score| ≥ 25 son oportunidad;
+  las débiles van a "Sin oportunidad clara", sin número. (7) @media
+  print: una columna, fondo blanco, sin ticker ni gráficos, sin
+  secciones de liga/misiones/logros que se solapaban. Pruebas
+  tests-v9.mjs: 21/21 con datos reales.

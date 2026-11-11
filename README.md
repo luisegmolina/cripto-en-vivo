@@ -38,6 +38,45 @@ exchanges**, y el frontend (React) solo habla con ese servidor en
   el log solo avisa la primera vez, no cada 5 s. Caché de markets: 15 s;
   el cliente sondea las pestañas cada 10 s.
 
+## Novedades v9: correcciones del PDF del 10-nov (11-nov-2026)
+
+Luis imprimió la app a PDF y salieron 8 fallos visibles. Todos corregidos:
+
+1. **Veredicto ESPERAR ya no muestra entrada:** antes salían stop y take
+   profit aunque el veredicto fuera ESPERAR. Ahora con ESPERAR solo se
+   muestra "Sin entrada" y los niveles de activación (a 1 ATR del precio:
+   si el precio los rompe con señal clara, ahí se activa el plan). La
+   entrada, el stop y el objetivo solo aparecen con COMPRAR o VENDER.
+   (También se corrigió que `tradePlan` se llamaba sin el veredicto.)
+2. **Historial y backtest por defecto en 1h, no 1m:** el 1m es ruido
+   (BTC 1m acertó 2 de 10 en la medición del 10-nov; backtest 37%).
+   Ahora el intervalo por defecto es 1h (backtest BTC 1h: 10 de 18, 56%,
+   medido el 11-nov) y si se cambia a 1m sale un aviso claro:
+   "1m es ruido, no apto para decidir".
+3. **Capitalización total REAL:** se eliminó el proxy precio × volumen
+   24h (daba "$0.4 mil M", absurdo). Nuevo endpoint `/api/global`
+   (CoinGecko, caché 5 min): capitalización total real y dominio de BTC
+   real. Si CoinGecko falla o da 429, la app muestra "No disponible",
+   nunca un número inventado.
+4. **Alertas sin duplicados:** una alerta suena UNA vez al cruzar y
+   luego entra en cooldown de 1 h para ese mismo precio objetivo
+   (lógica pura en `client/src/alerts.js`, probada en Node). Además no
+   se puede crear dos veces la misma alerta activa. En el PDF la misma
+   alerta de $73.53 sonó 4 veces; eso ya no puede pasar.
+5. **Estado del servidor para clientes:** ya no se muestra el JSON
+   crudo ni el "CoinGecko: HTTP 429" a plena vista. Solo "Servidor OK"
+   en verde y la fuente del precio. El debug queda detrás de un botón
+   plegado "Detalles técnicos".
+6. **Screener ordenado:** solo es oportunidad una señal CLARA
+   (|score| ≥ 25, de compra o de venta), ordenada por fuerza de señal.
+   Las débiles van abajo como "Sin oportunidad clara", sin número.
+   Antes XRP con señal −19 aparecía como oportunidad #2.
+7. **Impresión / PDF:** hoja `@media print` (una columna, fondo
+   blanco, texto negro, sin ticker animado, sin gráficos de velas, sin
+   secciones de liga/misiones/logros/compartir/perfil que se solapaban).
+8. Nada de v7/v8 se quitó. Pruebas en `tests-v9.mjs`: 21 de 21 pasaron
+   con datos reales del servidor local.
+
 ## Novedades v8: la señal de trading al frente (11-nov-2026)
 
 El objetivo de la app es TRADING: que el usuario vea en 5 segundos si

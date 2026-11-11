@@ -393,6 +393,34 @@ app.get('/api/markets', async (req, res) => {
     res.json(out);
   } catch (e) { res.status(502).json({ error: String(e.message || e) }); }
 });
+app.get('/api/global', async (req, res) => {
+  // v9: capitalización total REAL y dominio de BTC, de CoinGecko
+  // (/api/v3/global). El proxy precio × volumen 24h se eliminó: daba
+  // cifras absurdas ("$0.4 mil M"). Caché 5 min para no quemar el
+  // límite gratis de CoinGecko. Si CoinGecko falla o da 429, se
+  // devuelve available:false (503) y el cliente muestra "no disponible",
+  // nunca un número inventado.
+  const key = 'global';
+  const hit = getCache(key, 300000);
+  if (hit) return res.json(hit);
+  if (isCoolingDown('CoinGecko')) {
+    return res.status(503).json({ available: false, source: 'CoinGecko', error: `CoinGecko en pausa por 429 (${cooldownLeftSec('CoinGecko')} s restantes)` });
+  }
+  try {
+    const j = await fetchJSON('https://api.coingecko.com/api/v3/global');
+    const d = j.data || {};
+    const totalMarketCapUsd = d.total_market_cap && Number(d.total_market_cap.usd);
+    const btcDominance = d.market_cap_percentage && Number(d.market_cap_percentage.btc);
+    if (!totalMarketCapUsd) throw new Error('CoinGecko /global sin capitalización total');
+    markSuccess('CoinGecko');
+    const out = { available: true, source: 'CoinGecko', updatedAt: new Date().toISOString(), totalMarketCapUsd, btcDominance: btcDominance || null };
+    setCache(key, out);
+    res.json(out);
+  } catch (e) {
+    logSourceFail('CoinGecko', 'global', e);
+    res.status(503).json({ available: false, source: 'CoinGecko', error: String(e.message || e) });
+  }
+});
 app.get('/api/ticker', async (req, res) => {
   const a = assetOf(req.query.symbol || 'BTC');
   if (!a) return res.status(400).json({ error: 'Símbolo no válido. Usa BTC, ETH, SOL, XRP, ADA, DOGE, AVAX, LINK, LTC o DOT.' });
