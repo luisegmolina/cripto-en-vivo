@@ -1,0 +1,20 @@
+{
+  "description": "Cripto en Vivo \u2014 React + Node. El servidor trae los precios; el frontend solo habla con localhost.",
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  },
+  "name": "cripto-en-vivo",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix client run build",
+    "dev": "concurrently -k -n server,client \"npm --prefix server run dev\" \"node wait-for-server.js && npm --prefix client run dev\"",
+    "install:all": "npm install && npm --prefix server install --no-audit --no-fund && npm --prefix client install --no-audit --no-fund",
+    "start": "npm --prefix server start",
+    "vercel-build": "npm run install:all && npm run build"
+  },
+  "version": "1.0.0",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  }
+}

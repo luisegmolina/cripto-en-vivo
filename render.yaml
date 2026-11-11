@@ -1,0 +1,12 @@
+# Render (alternativa gratis si Vercel no permite crear el proyecto).
+# Web Service gratis: Node, build + start, el servidor sirve la API y el
+# frontend ya compilado (client/dist) en el mismo puerto que Render asigna
+# con la variable PORT. Plan free: se duerme tras inactividad (~50 s de
+# arranque en frío al volver a entrar) y 750 h/mes gratis.
+services:
+  - type: web
+    name: cripto-en-vivo
+    env: node
+    plan: free
+    buildCommand: npm run install:all && npm run build
+    startCommand: npm start

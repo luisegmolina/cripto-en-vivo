@@ -1,0 +1,10 @@
+Cripto en Vivo — VERSIÓN v6
+Fecha: 2026-11-11
+- v4 en la interfaz: "Cartera virtual + gráfico en vivo".
+- v5: configuración de despliegue (vercel.json, api/, render.yaml).
+- v6: guía RENDER.md con los pasos exactos para desplegar gratis en
+  Render (Luis crea el repo en GitHub y el servicio en Render).
+- Probado en modo producción (npm start): /api/health OK, BTC
+  $73,430.65 vía Coinbase, / HTTP 200.
+- Sin URL pública todavía: falta crear el repo y el servicio (ver
+  RENDER.md). Nada de pago, nada de dominio comprado.
