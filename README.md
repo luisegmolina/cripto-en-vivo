@@ -38,7 +38,100 @@ exchanges**, y el frontend (React) solo habla con ese servidor en
   el log solo avisa la primera vez, no cada 5 s. Caché de markets: 15 s;
   el cliente sondea las pestañas cada 10 s.
 
-## Novedades: gráfico en vivo y funciones para enganchar (11-nov-2026)
+## Novedades v7: Panel PRO, liga semanal, misiones, PWA y más (11-nov-2026)
+
+App pública en **https://cripto-en-vivo.onrender.com** (Render, plan gratis;
+se duerme tras ~15 min sin visitas, la primera carga tarda ~50 s).
+
+Todo es dinero VIRTUAL y prueba educativa. Sin registro obligatorio al
+entrar: solo cuando el usuario quiere guardar cartera/liga/alertas se le
+ofrece un apodo local (sin contraseña, sin servidor).
+
+### 1. Panel de mercado PRO (arriba)
+- **Dominio de BTC (aprox.):** parte de BTC en un proxy de capitalización
+  (precio × volumen 24h de las 10 criptos). Etiquetado "aprox.".
+- **Capitalización total (aprox.):** suma del mismo proxy.
+- **Índice de miedo y codicia:** ESTIMADO PROPIO con amplitud, impulso
+  medio y RSI de las 10 criptos. NO es el índice oficial de alternative.me.
+- **Mapa de calor** de las 10 criptos (verde/rojo por cambio 24h; toca una
+  celda para ver su gráfico) y "qué está caliente hoy".
+
+### 2. Gráfico PRO
+- Toggles para prender/apagar **EMA 20/50** (líneas naranja/azul),
+  **Bollinger** (3 líneas grises) y **RSI** (panel inferior con líneas
+  30/70).
+- **Comparar contra BTC:** línea morada con el rendimiento relativo del
+  activo frente a BTC (índice 100 = igual que al inicio del gráfico).
+- **Pantalla completa** (botón ⛶) y **latencia del último fetch en ms**
+  visible en el encabezado y en "Estado del servidor".
+
+### 3. Backtest de señales
+- Para el activo e intervalo seleccionados, recorre las velas históricas
+  con ventanas deslizantes, calcula la señal con los mismos indicadores
+  del análisis en vivo y comprueba si la vela siguiente fue en la
+  dirección sugerida. Muestra **"acertó X de Y" con porcentaje**,
+  desglosado en subidas y bajadas. El pasado no predice el futuro.
+
+### 4. Liga semanal de trading virtual
+- Todos empiezan el lunes con $10.000 virtuales; la liga se reinicia
+  cada lunes (clave por semana ISO en localStorage).
+- Tabla de posiciones con **rivales simulados locales** (nombres fijos,
+  rendimiento determinista por semana, etiquetados DEMO): no son personas
+  reales ni cuentas. Ganador del domingo con insignia 🥇.
+
+### 5. Misiones diarias y XP
+- Primera operación del día, poner una alerta, acertar/leer una señal,
+  explorar 3 activos, cartera en verde. XP acumulativo, nivel cada 100 XP,
+  progreso visible. Persiste en localStorage con la fecha del día.
+
+### 6. Alertas push / PWA
+- La app es instalable: `manifest.webmanifest` + service worker
+  (`client/public/sw.js`) + icono SVG. Las alertas de precio usan el
+  service worker para notificar aunque la pestaña esté en segundo plano.
+- **Honestidad: NO hay push real.** No hay VAPID ni backend de push
+  (Render gratis no lo da): el service worker solo muestra
+  notificaciones locales que la propia app le pide. Si la app está
+  cerrada del todo, la alerta no llega hasta volver a abrirla.
+
+### 7. Tarjeta para compartir por WhatsApp
+- Botón "Compartir texto" (navigator.share si existe, si no copia al
+  portapapeles), enlace directo a WhatsApp (`wa.me/?text=…`) y
+  **"Descargar tarjeta como imagen"** (PNG 1080×1080 dibujada con canvas)
+  con tu P&L semanal virtual, puesto en la liga y mejor operación, más
+  el enlace a la app.
+
+### 8. Liga privada con código
+- Crea una liga con nombre y código alfanumérico de 6 caracteres, o únete
+  con un código. Guardada en localStorage. Es local/demo: el código solo
+  existe en este navegador; no hay cuentas ni servidor de ligas.
+
+### 9. Screener / Oportunidades del día
+- Botón "Actualizar screener": trae velas de 1h de las 10 criptos,
+  calcula RSI y señal de cada una y las ordena por puntuación propia
+  (RSI + cambio 24h + volumen + señal), con una frase de explicación
+  por cada una. Toca una fila para ver su gráfico.
+
+### 10. Registro solo cuando hace falta
+- Sin login al entrar. Solo un campo de **apodo local** en "Tu perfil
+  local" (sin contraseña, sin servidor), que se usa en la liga semanal
+  y en la tarjeta para compartir. Nada se envía a ningún servidor.
+
+## Qué es real y qué es demo/local
+
+| Función | Estado |
+|---|---|
+| Precios, velas, mercados (Coinbase/Kraken/Binance US/CoinGecko vía servidor) | REAL |
+| Análisis RSI/MACD/EMA/Bollinger/patrones, backtest | REAL (cálculo local sobre datos reales), pero prueba educativa: no predice nada |
+| Cartera virtual, operaciones, alertas de precio | LOCAL (localStorage, dinero virtual) |
+| Dominio BTC, capitalización total, miedo y codicia | ESTIMADO PROPIO (proxy/etiqueta clara, no dato oficial) |
+| Liga semanal: rivales, puestos, ganador | DEMO/LOCAL (rivales simulados, sin cuentas) |
+| Liga privada con código | LOCAL (el código solo existe en este navegador) |
+| Misiones, XP, niveles, racha, logros | LOCAL |
+| PWA instalable + notificaciones | REAL (locales vía service worker); push real con servidor: NO EXISTE |
+| Tarjeta para compartir (texto + PNG) | REAL (se genera en tu navegador) |
+| Screener | REAL (cálculo sobre datos reales), prueba educativa |
+
+## Novedades v6 y anteriores
 
 ### El gráfico ahora se mueve con cada tick
 Antes la última vela solo cambiaba cada 6 s con el fetch de velas, y
@@ -318,3 +411,11 @@ cripto-en-vivo-react/
 - El APK de Android (requiere Android Studio en la laptop de Luis).
 - El servidor corre solo mientras la laptop esté encendida; si la apagas,
   la app deja de actualizar (es localhost, no está publicada en internet).
+  **La versión pública en Render (https://cripto-en-vivo.onrender.com)
+  no tiene ese problema**: corre en el servidor de Render, aunque el plan
+  gratis se duerme tras ~15 min sin visitas (~50 s de arranque en frío).
+- Push real con servidor (VAPID): no implementado a propósito en el plan
+  gratis de Render; las notificaciones actuales son locales vía service
+  worker (ver sección v7, punto 6).
+- Liga con cuentas reales y rivales humanos: no existe; la liga actual es
+  demo/local por diseño (ver sección v7, punto 4).

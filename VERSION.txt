@@ -1,10 +1,23 @@
-Cripto en Vivo — VERSIÓN v6
+Cripto en Vivo — VERSIÓN v7
 Fecha: 2026-11-11
 - v4 en la interfaz: "Cartera virtual + gráfico en vivo".
 - v5: configuración de despliegue (vercel.json, api/, render.yaml).
 - v6: guía RENDER.md con los pasos exactos para desplegar gratis en
   Render (Luis crea el repo en GitHub y el servicio en Render).
-- Probado en modo producción (npm start): /api/health OK, BTC
-  $73,430.65 vía Coinbase, / HTTP 200.
-- Sin URL pública todavía: falta crear el repo y el servicio (ver
-  RENDER.md). Nada de pago, nada de dominio comprado.
+- v6 desplegada en Render: https://cripto-en-vivo.onrender.com
+  (verificado: /api/health OK, BTC $73,855.48 vía Coinbase).
+- v7: PANEL DE MERCADO PRO (dominio BTC aprox., miedo y codicia
+  estimado propio, capitalización total aprox., mapa de calor),
+  GRÁFICO PRO (toggles EMA 20/50, Bollinger, RSI en panel inferior,
+  comparar contra BTC, pantalla completa, latencia visible),
+  BACKTEST DE SEÑALES ("acertó X de Y"), LIGA SEMANAL virtual con
+  rivales demo locales, MISIONES DIARIAS y XP con niveles, PWA
+  (manifest + service worker + notificaciones locales, SIN push real),
+  TARJETA PARA COMPARTIR por WhatsApp (texto + imagen PNG con canvas),
+  LIGA PRIVADA CON CÓDIGO (local), SCREENER / OPORTUNIDADES DEL DÍA,
+  PERFIL LOCAL con apodo (sin login, sin servidor).
+- Todo lo nuevo es dinero VIRTUAL y prueba educativa, sin registro
+  obligatorio al entrar. Lo que es demo/local va etiquetado en la app
+  y en el README (sección "Qué es real y qué es demo/local").
+- Probado: build del cliente sin errores; servidor local con curl a
+  /api/health, /api/ticker?symbol=BTC&currency=USD y /api/markets.

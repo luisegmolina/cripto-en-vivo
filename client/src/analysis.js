@@ -62,6 +62,43 @@ export function detectPatterns(candles) {
   return out;
 }
 
+// Serie EMA completa (un valor por vela, null hasta tener suficientes
+// datos) para dibujarla como línea en el gráfico.
+export function emaSeries(closes, period) {
+  const out = new Array(closes.length).fill(null);
+  if (closes.length < period) return out;
+  const k = 2 / (period + 1);
+  let e = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  out[period - 1] = e;
+  for (let i = period; i < closes.length; i++) {
+    e = closes[i] * k + e * (1 - k);
+    out[i] = e;
+  }
+  return out;
+}
+
+// Serie Bollinger completa (un {upper, middle, lower} por vela, null
+// hasta tener 20 velas) para dibujar las bandas como líneas.
+export function bollingerSeries(closes, period = 20) {
+  const out = new Array(closes.length).fill(null);
+  if (closes.length < period) return out;
+  for (let i = period - 1; i < closes.length; i++) {
+    const s = closes.slice(i - period + 1, i + 1);
+    const mean = s.reduce((a, b) => a + b, 0) / period;
+    const sd = Math.sqrt(s.reduce((a, b) => a + (b - mean) ** 2, 0) / period);
+    out[i] = { middle: mean, upper: mean + 2 * sd, lower: mean - 2 * sd };
+  }
+  return out;
+}
+
+// Serie RSI completa (un valor por vela, null hasta tener 15 velas)
+// para dibujarla como panel inferior del gráfico.
+export function rsiSeries(closes, period = 14) {
+  const out = new Array(closes.length).fill(null);
+  for (let i = period; i < closes.length; i++) out[i] = rsi(closes.slice(0, i + 1), period);
+  return out;
+}
+
 export function analyze(candles) {
   if (!candles || candles.length < 30) return { score: 0, label: 'Sin señal clara', detail: 'Faltan velas para calcular los indicadores.', rsi: null, macd: null, ema20: null, ema50: null, bollinger: null, patterns: [] };
   const closes = candles.map((c) => c.close);

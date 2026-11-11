@@ -1,7 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { createChart } from 'lightweight-charts';
-import { analyze } from './analysis.js';
+import { createChart, LineStyle } from 'lightweight-charts';
+import { analyze, emaSeries, bollingerSeries, rsiSeries } from './analysis.js';
 import { updateLastCandle, candlesSignature, mergeServerCandles } from './liveCandle.js';
+import { marketCapProxy, btcDominanceProxy, fearGreedEstimate, heatToday, isoWeekKey, rivalsForWeek } from './marketPro.js';
+import { backtestSignal } from './backtest.js';
+import { MISSIONS, levelForXp, xpIntoLevel, XP_PER_LEVEL } from './missions.js';
+import { screenOpportunities } from './screener.js';
+import { shareText, whatsappUrl, drawShareCard, APP_URL } from './shareCard.js';
 
 const ASSETS = [
   { symbol: 'BTC', name: 'Bitcoin' }, { symbol: 'ETH', name: 'Ethereum' },
@@ -13,6 +18,7 @@ const ASSETS = [
 const INTERVALS = ['1m', '5m', '15m', '1h', '6h', '1d'];
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
+const VERSION_LABEL = 'v7 — Panel PRO + liga semanal + misiones + PWA';
 
 const ACHIEVEMENTS = [
   { id: 'primera_operacion', name: 'Primera operación virtual', desc: 'Compra o vende por primera vez con dinero virtual.' },
@@ -68,6 +74,25 @@ function sameTicker(a, b) {
     && a.high24h === b.high24h && a.low24h === b.low24h && a.open24h === b.open24h
     && a.volume24h === b.volume24h && a.change24h === b.change24h;
 }
+function genCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let out = '';
+  for (let i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+// Notificación: si hay service worker activo, la muestra él (llega
+// aunque la pestaña esté en segundo plano); si no, la clásica del
+// navegador. Push real con servidor VAPID NO hay (ver README).
+function notify(title, body) {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+    navigator.serviceWorker.ready.then((reg) => reg.showNotification(title, { body, icon: '/icons/icon.svg' })).catch(() => {
+      try { new Notification(title, { body }); } catch {}
+    });
+  } else {
+    try { new Notification(title, { body }); } catch {}
+  }
+}
 
 // Mini gráfico (sparkline) con los últimos precios recogidos en vivo.
 function Sparkline({ values, width = 120, height = 28 }) {
@@ -105,6 +130,7 @@ export default function App() {
   const [flash, setFlash] = useState('');
   const [alerts, setAlerts] = useState([]);
   const [notif, setNotif] = useState(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
+  const [latencyMs, setLatencyMs] = useState(null);
   const prevPrice = useRef(null);
   const alertedKey = useRef('');
   const lastTicker = useRef(null);
@@ -116,7 +142,26 @@ export default function App() {
   const chartObj = useRef(null);
   const candleSeries = useRef(null);
   const volumeSeries = useRef(null);
+  const ema20Series = useRef(null);
+  const ema50Series = useRef(null);
+  const bbUpperSeries = useRef(null);
+  const bbMiddleSeries = useRef(null);
+  const bbLowerSeries = useRef(null);
+  const relSeries = useRef(null);
+  const rsiChartRef = useRef(null);
+  const rsiChartObj = useRef(null);
+  const rsiLineSeries = useRef(null);
+  const rsiHiSeries = useRef(null);
+  const rsiLoSeries = useRef(null);
   const candlesRef = useRef([]);
+
+  // --- Gráfico PRO: indicadores con toggle, comparar con BTC, pantalla completa ---
+  const [showEma, setShowEma] = useState(true);
+  const [showBoll, setShowBoll] = useState(true);
+  const [showRsi, setShowRsi] = useState(false);
+  const [compareBtc, setCompareBtc] = useState(false);
+  const [chartFull, setChartFull] = useState(false);
+  const [btcCandles, setBtcCandles] = useState([]);
 
   // --- Enganche: cartera virtual, alertas de precio, racha, logros ---
   const [portfolio, setPortfolio] = useState(() => loadLS('cev_portfolio_v1', { cash: START_CASH, holdings: {}, trades: [] }));
@@ -131,6 +176,38 @@ export default function App() {
   const priceAlertsRef = useRef(priceAlerts);
   priceAlertsRef.current = priceAlerts;
 
+  // --- Perfil local (sin login, sin servidor): solo un apodo ---
+  const [nickname, setNickname] = useState(() => (loadLS('cev_profile_v1', {}).nickname || ''));
+  const [nicknameInput, setNicknameInput] = useState(nickname);
+  const [profileMsg, setProfileMsg] = useState('');
+
+  // --- Liga semanal (demo/local) + liga privada con código ---
+  const weekKey = isoWeekKey();
+  const [leagueWeek, setLeagueWeek] = useState(() => loadLS('cev_league_week_v1', null));
+  const [privateLeague, setPrivateLeague] = useState(() => loadLS('cev_private_league_v1', null));
+  const [leagueNameInput, setLeagueNameInput] = useState('');
+  const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [leagueMsg, setLeagueMsg] = useState('');
+
+  // --- Misiones diarias y XP ---
+  const [missionDay, setMissionDay] = useState(() => {
+    const s = loadLS('cev_missions_v1', null);
+    return s && s.date === localDay(0) ? s : { date: localDay(0), done: {} };
+  });
+  const [xpTotal, setXpTotal] = useState(() => loadLS('cev_xp_v1', 0));
+  const [visitedToday, setVisitedToday] = useState(() => {
+    const s = loadLS('cev_visited_today_v1', null);
+    return s && s.date === localDay(0) ? s : { date: localDay(0), symbols: [] };
+  });
+
+  // --- Screener / compartir ---
+  const [screenRows, setScreenRows] = useState([]);
+  const [screenLoading, setScreenLoading] = useState(false);
+  const [screenError, setScreenError] = useState('');
+  const [screenUpdatedAt, setScreenUpdatedAt] = useState('');
+  const [shareMsg, setShareMsg] = useState('');
+  const shareCanvasRef = useRef(null);
+
   const unlock = (id) => {
     setAchievements((prev) => {
       if (prev.includes(id)) return prev;
@@ -141,6 +218,17 @@ export default function App() {
   };
   useEffect(() => { saveLS('cev_portfolio_v1', portfolio); }, [portfolio]);
   useEffect(() => { saveLS('cev_price_alerts_v1', priceAlerts); }, [priceAlerts]);
+
+  const completeMission = (id) => {
+    const today = localDay(0);
+    const base = missionDay.date === today ? missionDay : { date: today, done: {} };
+    if (base.done[id]) return;
+    const m = MISSIONS.find((x) => x.id === id);
+    const next = { date: today, done: { ...base.done, [id]: true } };
+    saveLS('cev_missions_v1', next);
+    setMissionDay(next);
+    if (m) setXpTotal((xp) => { const n = xp + m.xp; saveLS('cev_xp_v1', n); return n; });
+  };
 
   // Racha de días abriendo la app (solo local, sin cuentas).
   useEffect(() => {
@@ -156,7 +244,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Activos distintos visitados (logro Explorador).
+  // Activos distintos visitados (logro Explorador + misión diaria).
   useEffect(() => {
     const visited = loadLS('cev_visited_v1', []);
     if (!visited.includes(symbol)) {
@@ -164,34 +252,42 @@ export default function App() {
       saveLS('cev_visited_v1', next);
       if (next.length >= 5) unlock('explorador');
     }
+    const today = localDay(0);
+    const vt = loadLS('cev_visited_today_v1', null);
+    const base = vt && vt.date === today ? vt : { date: today, symbols: [] };
+    if (!base.symbols.includes(symbol)) {
+      const next = { date: today, symbols: [...base.symbols, symbol] };
+      saveLS('cev_visited_today_v1', next);
+      setVisitedToday(next);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol]);
 
   const analysis = useMemo(() => analyze(candles), [candles]);
+  // El backtest solo se recalcula cuando llega una vela nueva (no con
+  // cada tick), porque es el cálculo más pesado de la app.
+  const lastCandleKey = candles.length ? `${candles.length}:${candles[candles.length - 1].time}` : 'empty';
+  const backtest = useMemo(() => backtestSignal(candles), [lastCandleKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const capProxy = useMemo(() => marketCapProxy(markets), [markets]);
+  const btcDom = useMemo(() => btcDominanceProxy(markets), [markets]);
+  const fearGreed = useMemo(() => fearGreedEstimate(markets, analysis.rsi), [markets, analysis.rsi]);
+  const heat = useMemo(() => heatToday(markets), [markets]);
 
   // --- Datos: polling AL SERVIDOR (localhost:3001), nunca a los exchanges ---
   useEffect(() => {
     let alive = true;
     const loadTicker = async () => {
       try {
+        const t0 = performance.now();
         const t = await api(`/api/ticker?symbol=${symbol}&currency=${currency}`);
         if (!alive) return;
+        setLatencyMs(Math.round(performance.now() - t0));
         if (prevPrice.current != null && t.price !== prevPrice.current) {
           const dir = t.price > prevPrice.current ? 'up' : 'down';
           setFlash((f) => (f === dir ? f : dir));
         }
         prevPrice.current = t.price;
         // *** GRÁFICO EN VIVO: cada tick mueve la última vela ***
-        // Antes el ticker solo actualizaba el precio grande; la vela
-        // solo cambiaba cada 6 s con el fetch de velas. Ahora cada tick
-        // actualiza close/high/low de la vela en curso (updateLastCandle),
-        // se pinta al instante con series.update() y se guarda en el
-        // estado para que el análisis (RSI/MACD/...) también se mueva.
-        // Si el tick cae en un bucket nuevo, se crea la vela de ese
-        // bucket con el precio del tick; el próximo fetch del servidor
-        // la reemplaza por la vela oficial. La última vela de Coinbase
-        // va con ~4-5 min de retraso en 1m, por eso sin esto el gráfico
-        // parecía congelado aunque el precio sí se movía.
         const live = updateLastCandle(candlesRef.current, t.price, candleInterval);
         if (live && live !== candlesRef.current) {
           const last = live[live.length - 1];
@@ -266,7 +362,23 @@ export default function App() {
     lastChartSig.current = '';
     lastChartTime.current = null;
     prevPrice.current = null;
+    setBtcCandles([]);
   }, [symbol, currency, candleInterval]);
+
+  // Velas de BTC para "comparar contra BTC" (solo cuando está activo).
+  useEffect(() => {
+    if (!compareBtc || symbol === 'BTC') { setBtcCandles([]); return undefined; }
+    let alive = true;
+    const load = async () => {
+      try {
+        const c = await api(`/api/candles?symbol=BTC&currency=${currency}&interval=${candleInterval}`);
+        if (alive) setBtcCandles(c.candles || []);
+      } catch { /* si falla, la comparación simplemente no se dibuja */ }
+    };
+    load();
+    const t = setInterval(load, 10000);
+    return () => { alive = false; clearInterval(t); };
+  }, [compareBtc, symbol, currency, candleInterval]);
 
   // --- Alertas de precio personalizadas: se comprueban con cada tick ---
   useEffect(() => {
@@ -280,9 +392,7 @@ export default function App() {
       fired = true;
       const msg = `🔔 ${a.symbol}: llegó a ${fmt(price, currency)} (${a.direction === 'above' ? 'por encima de' : 'por debajo de'} ${fmt(a.target, currency)}) — ${new Date().toLocaleTimeString('es-US')}`;
       setAlerts((prev) => [msg, ...prev].slice(0, 20));
-      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-        try { new Notification('Cripto en Vivo — alerta de precio', { body: msg }); } catch {}
-      }
+      notify('Cripto en Vivo — alerta de precio', msg);
       return { ...a, triggered: true, triggeredAt: new Date().toISOString() };
     });
     if (fired) setPriceAlerts(next);
@@ -299,9 +409,7 @@ export default function App() {
     alertedKey.current = key;
     const msg = `${symbol}: ${sig} (${analysis.score}, ${analysis.strength}) — ${new Date().toLocaleTimeString('es-US')}`;
     setAlerts((a) => [msg, ...a].slice(0, 20));
-    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-      try { new Notification('Cripto en Vivo', { body: msg }); } catch {}
-    }
+    notify('Cripto en Vivo', msg);
   }, [signalLabel, signalScore, symbol]);
 
   // --- Gráfico de velas: creación (una sola vez, con limpieza) ---
@@ -317,6 +425,13 @@ export default function App() {
     chartObj.current = chart;
     candleSeries.current = chart.addCandlestickSeries({ upColor: '#22c55e', downColor: '#ef4444', wickUpColor: '#22c55e', wickDownColor: '#ef4444' });
     volumeSeries.current = chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: '' });
+    ema20Series.current = chart.addLineSeries({ color: '#f59e0b', lineWidth: 1, title: 'EMA 20', priceLineVisible: false, lastValueVisible: false });
+    ema50Series.current = chart.addLineSeries({ color: '#38bdf8', lineWidth: 1, title: 'EMA 50', priceLineVisible: false, lastValueVisible: false });
+    bbUpperSeries.current = chart.addLineSeries({ color: 'rgba(148,163,184,.7)', lineWidth: 1, title: 'Bollinger sup.', priceLineVisible: false, lastValueVisible: false });
+    bbMiddleSeries.current = chart.addLineSeries({ color: 'rgba(148,163,184,.4)', lineWidth: 1, title: 'Bollinger media', priceLineVisible: false, lastValueVisible: false });
+    bbLowerSeries.current = chart.addLineSeries({ color: 'rgba(148,163,184,.7)', lineWidth: 1, title: 'Bollinger inf.', priceLineVisible: false, lastValueVisible: false });
+    relSeries.current = chart.addLineSeries({ color: '#a78bfa', lineWidth: 2, title: 'vs BTC (índice 100)', priceScaleId: 'rel', priceLineVisible: false });
+    try { chart.priceScale('rel').applyOptions({ visible: false }); } catch {}
     const onResize = () => chart.applyOptions({ width: el.clientWidth });
     window.addEventListener('resize', onResize);
     return () => {
@@ -325,18 +440,30 @@ export default function App() {
       chartObj.current = null;
       candleSeries.current = null;
       volumeSeries.current = null;
+      ema20Series.current = null;
+      ema50Series.current = null;
+      bbUpperSeries.current = null;
+      bbMiddleSeries.current = null;
+      bbLowerSeries.current = null;
+      relSeries.current = null;
       lastChartSig.current = '';
     };
   }, []);
 
+  // Pantalla completa del gráfico: redimensionar al entrar/salir.
+  useEffect(() => {
+    const chart = chartObj.current;
+    const el = chartRef.current;
+    if (!chart || !el) return;
+    chart.applyOptions({ width: el.clientWidth, height: chartFull ? Math.max(300, window.innerHeight - 160) : 340 });
+  }, [chartFull]);
+
   // --- Gráfico de velas: datos (solo cuando cambia la firma de las velas) ---
-  // La firma ya incluye la última vela actualizada por cada tick, así que
-  // este efecto NO congela el gráfico: cada tick cambia la firma y se
-  // repinta. Solo se evita el scroll automático si la última vela no es
-  // nueva (para no sacarte del gráfico si hiciste scroll atrás).
   useEffect(() => {
     if (!candleSeries.current || !volumeSeries.current || !chartObj.current) return;
-    const sig = `${candlesSignature(candles)}|${analysis.patterns.map((p) => `${p.time}:${p.name}`).join(',')}`;
+    const closes = candles.map((c) => c.close);
+    const times = candles.map((c) => c.time);
+    const sig = `${candlesSignature(candles)}|${analysis.patterns.map((p) => `${p.time}:${p.name}`).join(',')}|ema:${showEma}|boll:${showBoll}|rsi:${showRsi}|vsbtc:${compareBtc}|btc:${btcCandles.length ? btcCandles[btcCandles.length - 1].time : 0}`;
     if (sig === lastChartSig.current) return;
     lastChartSig.current = sig;
     candleSeries.current.setData(candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
@@ -346,12 +473,78 @@ export default function App() {
       color: p.dir === 'up' ? '#22c55e' : p.dir === 'down' ? '#ef4444' : '#94a3b8',
       shape: p.dir === 'up' ? 'arrowUp' : p.dir === 'down' ? 'arrowDown' : 'circle', text: p.name,
     })));
+    // EMA 20/50 como líneas (toggle).
+    const toPoints = (series) => times.map((t, i) => (series[i] == null ? null : { time: t, value: series[i] })).filter(Boolean);
+    try {
+      ema20Series.current?.setData(toPoints(emaSeries(closes, 20)));
+      ema20Series.current?.applyOptions({ visible: showEma });
+      ema50Series.current?.setData(toPoints(emaSeries(closes, 50)));
+      ema50Series.current?.applyOptions({ visible: showEma });
+    } catch {}
+    // Bollinger como 3 líneas (toggle).
+    try {
+      const bb = bollingerSeries(closes);
+      const pick = (k) => times.map((t, i) => (bb[i] == null ? null : { time: t, value: bb[i][k] })).filter(Boolean);
+      bbUpperSeries.current?.setData(pick('upper'));
+      bbMiddleSeries.current?.setData(pick('middle'));
+      bbLowerSeries.current?.setData(pick('lower'));
+      bbUpperSeries.current?.applyOptions({ visible: showBoll });
+      bbMiddleSeries.current?.applyOptions({ visible: showBoll });
+      bbLowerSeries.current?.applyOptions({ visible: showBoll });
+    } catch {}
+    // Comparar contra BTC: índice relativo (100 = igual que al inicio).
+    try {
+      if (compareBtc && symbol !== 'BTC' && btcCandles.length > 1 && candles.length > 1) {
+        const btcByTime = new Map(btcCandles.map((c) => [c.time, c.close]));
+        const pairs = [];
+        for (let i = 0; i < candles.length; i++) {
+          const b = btcByTime.get(candles[i].time);
+          if (b != null) pairs.push([candles[i].time, candles[i].close, b]);
+        }
+        if (pairs.length > 1) {
+          const [t0, a0, b0] = pairs[0];
+          relSeries.current?.setData(pairs.map(([t, a, b]) => ({ time: t, value: ((a / a0) / (b / b0)) * 100 })));
+          relSeries.current?.applyOptions({ visible: true });
+          chartObj.current.priceScale('rel').applyOptions({ visible: true });
+        } else {
+          relSeries.current?.applyOptions({ visible: false });
+        }
+      } else {
+        relSeries.current?.applyOptions({ visible: false });
+        try { chartObj.current.priceScale('rel').applyOptions({ visible: false }); } catch {}
+      }
+    } catch {}
+    // RSI como panel inferior (toggle; el mini gráfico se crea al activarlo).
+    if (showRsi && rsiChartRef.current) {
+      try {
+        if (!rsiChartObj.current) {
+          const rc = createChart(rsiChartRef.current, {
+            width: rsiChartRef.current.clientWidth, height: 120,
+            layout: { background: { color: '#0b0f14' }, textColor: '#cbd5e1' },
+            grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
+            timeScale: { timeVisible: true, secondsVisible: false },
+            rightPriceScale: { visible: true },
+          });
+          rsiChartObj.current = rc;
+          rsiLineSeries.current = rc.addLineSeries({ color: '#f59e0b', lineWidth: 2, title: 'RSI 14', priceLineVisible: false });
+          rsiHiSeries.current = rc.addLineSeries({ color: '#64748b', lineWidth: 1, lineStyle: LineStyle.Dashed, title: '70', priceLineVisible: false, lastValueVisible: false });
+          rsiLoSeries.current = rc.addLineSeries({ color: '#64748b', lineWidth: 1, lineStyle: LineStyle.Dashed, title: '30', priceLineVisible: false, lastValueVisible: false });
+        }
+        rsiChartObj.current.applyOptions({ width: rsiChartRef.current.clientWidth });
+        const rs = rsiSeries(closes);
+        rsiLineSeries.current?.setData(toPoints(rs));
+        const span = times.length ? [{ time: times[0], value: 70 }, { time: times[times.length - 1], value: 70 }] : [];
+        const span30 = times.length ? [{ time: times[0], value: 30 }, { time: times[times.length - 1], value: 30 }] : [];
+        rsiHiSeries.current?.setData(span);
+        rsiLoSeries.current?.setData(span30);
+      } catch {}
+    }
     const lastTime = candles.length ? candles[candles.length - 1].time : null;
     if (lastTime !== lastChartTime.current) {
       lastChartTime.current = lastTime;
       chartObj.current.timeScale().scrollToRealTime();
     }
-  }, [candles, analysis]);
+  }, [candles, analysis, showEma, showBoll, showRsi, compareBtc, btcCandles]);
 
   const testServer = async () => {
     setTestResult('Probando…');
@@ -391,6 +584,59 @@ export default function App() {
   useEffect(() => { if (totalValue >= START_CASH * 1.02) unlock('en_verde'); }, [totalValue]);
   const topGainer = markets.length ? [...markets].sort((a, b) => (b.change24h ?? -999) - (a.change24h ?? -999))[0] : null;
   const topLoser = markets.length ? [...markets].sort((a, b) => (a.change24h ?? 999) - (b.change24h ?? 999))[0] : null;
+
+  // --- Liga semanal: inicio de semana guardado, rivales demo deterministas ---
+  useEffect(() => {
+    const stored = loadLS('cev_league_week_v1', null);
+    const cur = stored || leagueWeek;
+    if (!cur || cur.weekKey !== weekKey) {
+      const next = { weekKey, startValue: totalValue > 0 ? totalValue : START_CASH };
+      saveLS('cev_league_week_v1', next);
+      setLeagueWeek(next);
+    } else if (totalValue > 0 && totalValue < cur.startValue * 0.6) {
+      // La cartera se reinició: la semana empieza desde el valor actual.
+      const next = { ...cur, startValue: totalValue };
+      saveLS('cev_league_week_v1', next);
+      setLeagueWeek(next);
+    } else if (!leagueWeek || leagueWeek.weekKey !== cur.weekKey || leagueWeek.startValue !== cur.startValue) {
+      setLeagueWeek(cur);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weekKey, totalValue]);
+  const weekStart = leagueWeek && leagueWeek.weekKey === weekKey ? leagueWeek.startValue : totalValue;
+  const myWeeklyReturn = weekStart > 0 ? ((totalValue - weekStart) / weekStart) * 100 : 0;
+  const myWeeklyPnl = totalValue - weekStart;
+  const rivals = useMemo(() => rivalsForWeek(weekKey), [weekKey]);
+  const standings = useMemo(() => {
+    const rows = [
+      ...rivals.map((r) => ({ name: r.name, ret: r.weeklyReturn, demo: true, me: false })),
+      { name: nickname ? `${nickname} (tú)` : 'Tú', ret: myWeeklyReturn, demo: false, me: true },
+    ];
+    return rows.sort((a, b) => b.ret - a.ret).map((r, i) => ({ ...r, rank: i + 1 }));
+  }, [rivals, myWeeklyReturn, nickname]);
+  const myRank = standings.find((s) => s.me)?.rank || null;
+  const isSunday = new Date().getDay() === 0;
+  const weekWinner = isSunday && standings.length ? standings[0] : null;
+
+  // --- Misiones: comprobación automática de las que se pueden detectar ---
+  useEffect(() => {
+    const today = localDay(0);
+    if ((portfolio.trades || []).some((tr) => new Date(tr.time).toLocaleDateString('en-CA') === today)) completeMission('primera_operacion');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portfolio.trades]);
+  useEffect(() => {
+    const today = localDay(0);
+    if (priceAlerts.some((a) => new Date(a.createdAt).toLocaleDateString('en-CA') === today)) completeMission('poner_alerta');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [priceAlerts]);
+  useEffect(() => {
+    if ((visitedToday.symbols || []).length >= 3) completeMission('explorar_3');
+    if (totalValue > START_CASH) completeMission('en_verde');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visitedToday, totalValue]);
+  const level = levelForXp(xpTotal);
+  const xpInLevel = xpIntoLevel(xpTotal);
+  const missionsDoneToday = MISSIONS.filter((m) => missionDay.done[m.id]).length;
 
   const doTrade = (side) => {
     const amount = Number(paperAmount);
@@ -436,6 +682,83 @@ export default function App() {
     setPaperMsg(`Alerta creada: ${symbol} ${alertDir === 'above' ? 'por encima de' : 'por debajo de'} ${fmt(target, currency)}.`);
   };
 
+  // --- Screener: se calcula bajo demanda (10 llamadas a /api/candles, 1h) ---
+  const runScreener = async () => {
+    setScreenLoading(true);
+    setScreenError('');
+    try {
+      const settled = await Promise.allSettled(ASSETS.map((a) => api(`/api/candles?symbol=${a.symbol}&currency=${currency}&interval=1h`)));
+      const analyses = {};
+      settled.forEach((r, i) => {
+        if (r.status === 'fulfilled' && r.value.candles && r.value.candles.length) analyses[ASSETS[i].symbol] = analyze(r.value.candles);
+      });
+      setScreenRows(screenOpportunities(markets, analyses));
+      setScreenUpdatedAt(new Date().toLocaleTimeString('es-US'));
+    } catch (e) { setScreenError(String(e.message || e)); }
+    finally { setScreenLoading(false); }
+  };
+
+  // --- Perfil local + liga privada + compartir ---
+  const saveNickname = () => {
+    const nick = nicknameInput.trim().slice(0, 20);
+    saveLS('cev_profile_v1', { nickname: nick });
+    setNickname(nick);
+    setProfileMsg(nick ? `Apodo guardado: ${nick}. Se usa en la liga y en la tarjeta para compartir.` : 'Apodo borrado.');
+  };
+  const createPrivateLeague = () => {
+    const name = leagueNameInput.trim().slice(0, 30) || 'Mi liga';
+    const code = genCode();
+    const lg = { code, name, members: [nickname || 'Tú'], createdAt: new Date().toISOString() };
+    saveLS('cev_private_league_v1', lg);
+    setPrivateLeague(lg);
+    setLeagueMsg(`Liga "${name}" creada. Código: ${code}. Compártelo con tus amigos. Es local/demo: el código solo existe en este navegador.`);
+  };
+  const joinPrivateLeague = () => {
+    const code = joinCodeInput.trim().toUpperCase();
+    if (!code) { setLeagueMsg('Escribe un código para unirte.'); return; }
+    if (privateLeague && privateLeague.code === code) { setLeagueMsg('Ya estás en esa liga.'); return; }
+    const lg = { code, name: `Liga ${code}`, members: [nickname || 'Tú'], createdAt: new Date().toISOString(), joined: true };
+    saveLS('cev_private_league_v1', lg);
+    setPrivateLeague(lg);
+    setLeagueMsg(`Te uniste a la liga con código ${code}. Es local/demo: solo existe en este navegador, no hay cuentas ni servidor de ligas.`);
+  };
+  const leavePrivateLeague = () => {
+    saveLS('cev_private_league_v1', null);
+    setPrivateLeague(null);
+    setLeagueMsg('Saliste de la liga privada local.');
+  };
+  const bestTrade = (portfolio.trades || []).reduce((best, tr) => (!best || tr.total > best.total ? tr : best), null);
+  const bestTradeText = bestTrade
+    ? `${bestTrade.side === 'buy' ? 'Compró' : 'Vendió'} ${fmtNum(bestTrade.qty, 4)} ${bestTrade.symbol} por ${fmt(bestTrade.total, bestTrade.currency || currency)}`
+    : null;
+  const shareData = {
+    nickname, pnl: myWeeklyPnl, pnlPct: myWeeklyReturn, rank: myRank,
+    leagueSize: standings.length, weekLabel: weekKey, bestTrade: bestTradeText, currencySym: CUR[currency],
+  };
+  const doShareText = async () => {
+    const text = shareText(shareData);
+    if (navigator.share) {
+      try { await navigator.share({ title: 'Cripto en Vivo', text }); setShareMsg('Compartido.'); return; }
+      catch { /* el usuario canceló: cae al portapapeles */ }
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setShareMsg('Texto copiado al portapapeles. Pégalo en WhatsApp.');
+    } catch {
+      setShareMsg('No se pudo copiar automáticamente. Usa el botón de WhatsApp de abajo.');
+    }
+  };
+  const downloadCard = () => {
+    const canvas = shareCanvasRef.current;
+    if (!canvas) return;
+    drawShareCard(canvas, shareData);
+    const a = document.createElement('a');
+    a.download = `cripto-en-vivo-${weekKey}.png`;
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+    setShareMsg('Tarjeta descargada como imagen PNG. Compártela en WhatsApp.');
+  };
+
   const change24 = ticker?.change24h;
   const sigColor = analysis.label === 'Posible subida' ? '#22c55e' : analysis.label === 'Posible bajada' ? '#ef4444' : '#94a3b8';
   const sigPct = Math.round(((analysis.score + 100) / 200) * 100);
@@ -448,6 +771,7 @@ export default function App() {
     : downCount >= 8 && (avgChange ?? 0) < -1 ? 'Pánico: casi todo baja'
     : downCount >= 6 ? 'Pesimista: la mayoría baja'
     : 'Neutral: el mercado no se decide';
+  const fgColor = !fearGreed ? '#94a3b8' : fearGreed.value <= 24 ? '#ef4444' : fearGreed.value <= 44 ? '#f97316' : fearGreed.value <= 55 ? '#eab308' : fearGreed.value <= 75 ? '#84cc16' : '#22c55e';
 
   return (
     <div className="app">
@@ -468,9 +792,48 @@ export default function App() {
       </div>
 
       <header>
-        <div><h1>₿ Cripto en Vivo</h1><p>Precios reales desde el servidor local · React + Node · v4 — Cartera virtual + gráfico en vivo</p></div>
-        <div className="badge">{source ? `Fuente: ${source}` : 'Conectando…'} · {updatedAt ? new Date(updatedAt).toLocaleTimeString('es-US') : ''}</div>
+        <div><h1>₿ Cripto en Vivo</h1><p>Precios reales desde el servidor · React + Node · {VERSION_LABEL}</p></div>
+        <div className="badge">{source ? `Fuente: ${source}` : 'Conectando…'} · {updatedAt ? new Date(updatedAt).toLocaleTimeString('es-US') : ''}{latencyMs != null ? ` · latencia ${latencyMs} ms` : ''}</div>
       </header>
+
+      <p className="warn">⚠️ Prueba educativa con dinero VIRTUAL. Nada de esto es una recomendación de inversión, no hay dinero real ni registro obligatorio. Tu cartera, liga, misiones y alertas viven solo en este navegador.</p>
+
+      {/* Perfil local: apodo sin cuentas */}
+      <section className="card profile">
+        <h2>👤 Tu perfil local {nickname ? `— ${nickname}` : ''}</h2>
+        <p className="muted">Sin registro ni contraseña: solo un apodo guardado en este navegador, que se usa en la liga semanal y en la tarjeta para compartir. Nada se envía a ningún servidor.</p>
+        <div className="row">
+          <label>Apodo: <input type="text" maxLength={20} value={nicknameInput} placeholder="Ej.: Luis" onChange={(e) => setNicknameInput(e.target.value)} /></label>
+          <button onClick={saveNickname}>Guardar apodo</button>
+          {profileMsg && <span className="muted">{profileMsg}</span>}
+        </div>
+      </section>
+
+      {/* Panel de mercado PRO */}
+      <section className="card">
+        <h2>📊 Panel de mercado PRO</h2>
+        <div className="stats">
+          <div><span>Dominio de BTC (aprox.)</span><b>{btcDom != null ? `${btcDom.toFixed(1)}%` : '—'}</b></div>
+          <div><span>Capitalización total (aprox.)</span><b>{capProxy != null ? `${CUR[currency]}${(capProxy / 1e9).toFixed(1)} mil M` : '—'}</b></div>
+          <div><span>Miedo y codicia (estimado propio)</span><b style={{ color: fgColor }}>{fearGreed ? `${fearGreed.value} / 100 · ${fearGreed.label}` : '—'}</b></div>
+          <div><span>Qué está caliente hoy</span><b className={heat.length && heat[0].change24h >= 0 ? 'up' : 'down'}>{heat.length ? `▲ ${heat[0].symbol} +${heat[0].change24h.toFixed(2)}%` : '—'}</b></div>
+        </div>
+        <p className="muted">Dominio y capitalización son un proxy calculado aquí con precio × volumen 24h de las 10 criptos — NO son los datos oficiales de capitalización (precio × oferta en circulación). El índice de miedo y codicia es un estimado propio con amplitud, impulso y RSI; NO es el índice oficial de alternative.me.</p>
+        {heat.length > 0 && (
+          <div className="heatmap" aria-label="Mapa de calor de las 10 criptos">
+            {heat.map((m) => {
+              const v = m.change24h ?? 0;
+              const intensity = Math.min(1, Math.abs(v) / 6);
+              const bg = v >= 0 ? `rgba(34,197,94,${0.15 + intensity * 0.65})` : `rgba(239,68,68,${0.15 + intensity * 0.65})`;
+              return (
+                <button key={m.symbol} className="heat-cell" style={{ background: bg }} onClick={() => setSymbol(m.symbol)} title={`${m.symbol}: ${v >= 0 ? '+' : ''}${v.toFixed(2)}% en 24 h — toca para ver su gráfico`}>
+                  <b>{m.symbol}</b><span>{v >= 0 ? '+' : ''}{v.toFixed(2)}%</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       {/* Racha + ánimo del mercado */}
       <section className="card mood">
@@ -492,9 +855,10 @@ export default function App() {
       <section className="card status">
         <h2>Estado del servidor</h2>
         <div className="stats">
-          <div><span>Servidor (localhost:3001)</span><b className={serverStatus.startsWith('OK') ? 'up' : serverStatus.startsWith('FALLO') ? 'down' : ''}>{serverStatus}</b></div>
+          <div><span>Servidor</span><b className={serverStatus.startsWith('OK') ? 'up' : serverStatus.startsWith('FALLO') ? 'down' : ''}>{serverStatus}</b></div>
           <div><span>Última actualización</span><b>{updatedAt ? new Date(updatedAt).toLocaleTimeString('es-US') : '— (nunca llegó un precio)'}</b></div>
           <div><span>Fuente del precio</span><b>{source || '—'}</b></div>
+          <div><span>Latencia del último fetch</span><b>{latencyMs != null ? `${latencyMs} ms` : '—'}</b></div>
         </div>
         {(error || marketsError || candlesError) && (
           <p className="errtext">Último error exacto — precio: {error || 'ninguno'} · pestañas: {marketsError || 'ninguno'} · velas: {candlesError || 'ninguno'}</p>
@@ -528,9 +892,10 @@ export default function App() {
         </div>
       </section>
 
-      <section className="card">
+      <section className={`card ${chartFull ? 'chart-full' : ''}`}>
         <div className="row"><h2>Precio actual · {symbol}-{currency}</h2>
           <span className={flash === 'up' ? 'flash up' : flash === 'down' ? 'flash down' : 'flash'}>{change24 != null ? `${change24 >= 0 ? '▲' : '▼'} ${change24.toFixed(2)}% 24h` : 'Esperando datos…'}</span>
+          <button onClick={() => setChartFull((f) => !f)}>{chartFull ? '⤢ Salir de pantalla completa' : '⛶ Pantalla completa'}</button>
         </div>
         <div className={`big ${flash === 'up' ? 'price-up' : flash === 'down' ? 'price-down' : ''}`} key={ticker?.price}>{ticker?.price ? fmt(ticker.price, currency) : '—'}</div>
         <div className="stats">
@@ -542,8 +907,15 @@ export default function App() {
         <div className="intervals">
           {INTERVALS.map((i) => <button key={i} className={candleInterval === i ? 'on' : ''} onClick={() => setCandleInterval(i)}>{i === '1h' ? '1H' : i === '1d' ? '1D' : i}</button>)}
         </div>
+        <div className="row toggles">
+          <button className={showEma ? 'on' : ''} onClick={() => setShowEma((v) => !v)}>EMA 20/50 {showEma ? '✓' : ''}</button>
+          <button className={showBoll ? 'on' : ''} onClick={() => setShowBoll((v) => !v)}>Bollinger {showBoll ? '✓' : ''}</button>
+          <button className={showRsi ? 'on' : ''} onClick={() => setShowRsi((v) => !v)}>RSI (panel) {showRsi ? '✓' : ''}</button>
+          <button className={compareBtc ? 'on' : ''} onClick={() => setCompareBtc((v) => !v)} disabled={symbol === 'BTC'}>Comparar vs BTC {compareBtc ? '✓' : ''}</button>
+        </div>
         <div ref={chartRef} className="chart" />
-        <p className="muted">Actualización: precio cada 1 s, última vela se mueve con cada tick, velas completas cada 6 s, desde el servidor (Coinbase → Kraken → Binance US → CoinGecko).</p>
+        {showRsi && <div ref={rsiChartRef} className="chart rsi-chart" />}
+        <p className="muted">Actualización: precio cada 1 s, última vela se mueve con cada tick, velas completas cada 6 s, desde el servidor (Coinbase → Kraken → Binance US → CoinGecko). Latencia del último fetch: {latencyMs != null ? `${latencyMs} ms` : '—'}. {compareBtc && symbol !== 'BTC' ? 'La línea morada es el índice relativo vs BTC (100 = igual que al inicio del gráfico; sube si el activo rinde mejor que BTC).' : ''}</p>
       </section>
 
       <section className="card">
@@ -567,8 +939,52 @@ export default function App() {
         <div className="row">
           <button onClick={askNotif}>{notif === 'granted' ? '✓ Notificaciones activas' : 'Activar notificaciones del navegador'}</button>
           <button onClick={() => setAlerts([])}>Limpiar alertas</button>
+          <button onClick={() => completeMission('leer_senal')}>{missionDay.done.leer_senal ? '✓ Señal de hoy leída (+10 XP)' : 'Marcar señal como leída (+10 XP)'}</button>
         </div>
         {alerts.length > 0 && <ul className="alerts">{alerts.map((a, i) => <li key={i}>🔔 {a}</li>)}</ul>}
+      </section>
+
+      {/* Backtest de señales */}
+      <section className="card">
+        <h2>🧪 Backtest de señales — {symbol} ({candleInterval})</h2>
+        <p className="warn">⚠️ Prueba educativa sobre velas pasadas. Que una señal acertara antes NO significa que acierte mañana. Sin promesas.</p>
+        {backtest.total > 0 ? (
+          <div>
+            <p className="big-backtest">La señal acertó <b>{backtest.wins} de {backtest.total}</b> veces ({backtest.pct}%)</p>
+            <div className="stats">
+              <div><span>Señales de subida</span><b>{backtest.upWins} de {backtest.upTotal} ({backtest.upTotal ? Math.round((backtest.upWins / backtest.upTotal) * 100) : '—'}%)</b></div>
+              <div><span>Señales de bajada</span><b>{backtest.downWins} de {backtest.downTotal} ({backtest.downTotal ? Math.round((backtest.downWins / backtest.downTotal) * 100) : '—'}%)</b></div>
+              <div><span>Ventanas analizadas</span><b>{backtest.total} con señal clara</b></div>
+            </div>
+            <p className="muted">Método: en cada ventana de velas se calculó la señal con los mismos indicadores del análisis en vivo y se comprobó si la vela siguiente fue en la dirección sugerida. Solo cuentan las ventanas con señal clara.</p>
+          </div>
+        ) : (
+          <p className="muted">{backtest.note || 'Cargando velas para el backtest…'}</p>
+        )}
+      </section>
+
+      {/* Screener / Oportunidades del día */}
+      <section className="card">
+        <h2>🔍 Oportunidades del día</h2>
+        <p className="muted">Las 10 criptos ordenadas por RSI, cambio 24h, volumen y puntuación de señal (velas de 1h). Toca "Actualizar" para calcularlo con datos frescos.</p>
+        <div className="row">
+          <button onClick={runScreener} disabled={screenLoading}>{screenLoading ? 'Calculando…' : 'Actualizar screener'}</button>
+          {screenUpdatedAt && <span className="muted">Actualizado a las {screenUpdatedAt}</span>}
+        </div>
+        {screenError && <p className="errtext">{screenError}</p>}
+        {screenRows.length > 0 && (
+          <ol className="screener">
+            {screenRows.map((r, i) => (
+              <li key={r.symbol} onClick={() => setSymbol(r.symbol)} title="Toca para ver su gráfico">
+                <b>#{i + 1} {r.symbol}</b> — {r.price ? fmt(r.price, currency) : '—'}
+                <span className={r.change24h >= 0 ? 'up' : 'down'}> {r.change24h >= 0 ? '+' : ''}{r.change24h.toFixed(2)}% 24h</span>
+                <span className="muted"> · RSI {r.rsi != null ? r.rsi.toFixed(0) : '—'} · señal {r.score != null ? r.score : '—'} · {r.points} pts</span>
+                <br /><span className="muted">{r.reason}</span>
+              </li>
+            ))}
+          </ol>
+        )}
+        {screenRows.length === 0 && !screenLoading && <p className="muted">Todavía no hay screener: pulsa "Actualizar screener".</p>}
       </section>
 
       {/* Cartera virtual */}
@@ -606,6 +1022,75 @@ export default function App() {
         )}
       </section>
 
+      {/* Liga semanal (demo/local) */}
+      <section className="card">
+        <h2>🏆 Liga semanal — {weekKey}</h2>
+        <p className="warn">⚠️ Liga DEMO y local: tus rivales son jugadores simulados de ejemplo (no personas reales ni cuentas) y tu puesto vive solo en este navegador. Todos empiezan el lunes con $10.000 virtuales; la liga se reinicia cada lunes.</p>
+        {weekWinner && (
+          <p className="winner">🏆 Ganador de la semana ({weekKey}): <b>{weekWinner.name}</b> con {weekWinner.ret >= 0 ? '+' : ''}{weekWinner.ret.toFixed(2)}% {weekWinner.me ? '— ¡eres tú!' : ''}</p>
+        )}
+        <p className="muted">Tu semana: {myWeeklyPnl >= 0 ? '+' : ''}{fmt(myWeeklyPnl, currency)} ({myWeeklyReturn >= 0 ? '+' : ''}{myWeeklyReturn.toFixed(2)}%) desde {fmt(weekStart, currency)} · Puesto {myRank} de {standings.length}{isSunday ? ' · Hoy domingo se cierra la semana.' : ' · La semana termina el domingo.'}</p>
+        <table className="league-table">
+          <thead><tr><th>#</th><th>Jugador</th><th>Rendimiento semanal</th></tr></thead>
+          <tbody>
+            {standings.map((s) => (
+              <tr key={s.name} className={s.me ? 'me' : ''}>
+                <td>{s.rank === 1 ? '🥇' : s.rank === 2 ? '🥈' : s.rank === 3 ? '🥉' : s.rank}</td>
+                <td><b>{s.name}</b>{s.demo ? ' <span className="muted">(demo)</span>' : ''}</td>
+                <td className={s.ret >= 0 ? 'up' : 'down'}>{s.ret >= 0 ? '+' : ''}{s.ret.toFixed(2)}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      {/* Liga privada con código */}
+      <section className="card">
+        <h2>🔐 Liga privada con código</h2>
+        <p className="muted">Crea una liga con un código y compártelo con tus amigos, o únete con un código que te den. Es local/demo: la liga y sus miembros solo existen en este navegador; no hay cuentas ni servidor de ligas.</p>
+        {privateLeague ? (
+          <div>
+            <p>Estás en la liga privada <b>"{privateLeague.name}"</b> · código <b className="code">{privateLeague.code}</b> · miembros locales: {privateLeague.members.join(', ')}</p>
+            <div className="row"><button onClick={leavePrivateLeague}>Salir de la liga privada</button></div>
+          </div>
+        ) : (
+          <div className="row">
+            <label>Nombre de tu liga: <input type="text" maxLength={30} value={leagueNameInput} placeholder="Ej.: Liga de Luis" onChange={(e) => setLeagueNameInput(e.target.value)} /></label>
+            <button onClick={createPrivateLeague}>Crear liga con código</button>
+            <label>Código para unirse: <input type="text" maxLength={10} value={joinCodeInput} placeholder="Ej.: K7X2Q9" onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())} /></label>
+            <button onClick={joinPrivateLeague}>Unirse con código</button>
+          </div>
+        )}
+        {leagueMsg && <p className="muted">{leagueMsg}</p>}
+      </section>
+
+      {/* Misiones diarias y XP */}
+      <section className="card">
+        <h2>🎯 Misiones diarias y XP — Nivel {level}</h2>
+        <p className="muted">XP total: <b>{xpTotal}</b> · Nivel {level} · {xpInLevel}/{XP_PER_LEVEL} XP para el nivel {level + 1} · Hoy llevas {missionsDoneToday} de {MISSIONS.length} misiones.</p>
+        <div className="score-bar" aria-hidden="true"><div style={{ width: `${(xpInLevel / XP_PER_LEVEL) * 100}%`, background: '#f59e0b' }} /></div>
+        <div className="achievements">
+          {MISSIONS.map((m) => (
+            <div key={m.id} className={missionDay.done[m.id] ? 'ach unlocked' : 'ach locked'}>
+              <b>{missionDay.done[m.id] ? '✓' : '○'} {m.name} · +{m.xp} XP</b><span>{m.desc}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Compartir por WhatsApp */}
+      <section className="card">
+        <h2>📣 Compartir mi semana por WhatsApp</h2>
+        <p className="muted">Comparte tu P&L virtual de la semana, tu puesto en la liga y tu mejor operación. Solo se comparte lo que tú pulses; nada sale solo de tu navegador.</p>
+        <div className="row">
+          <button onClick={doShareText}>Compartir texto</button>
+          <a className="btn-link" href={whatsappUrl(shareText(shareData))} target="_blank" rel="noreferrer">Abrir en WhatsApp</a>
+          <button onClick={downloadCard}>Descargar tarjeta como imagen</button>
+        </div>
+        {shareMsg && <p className="muted">{shareMsg}</p>}
+        <canvas ref={shareCanvasRef} style={{ display: 'none' }} aria-hidden="true" />
+      </section>
+
       {/* Alertas de precio */}
       <section className="card">
         <h2>🔔 Alertas de precio</h2>
@@ -641,7 +1126,7 @@ export default function App() {
         </div>
       </section>
 
-      <footer>Fuente de datos: APIs públicas de Coinbase, Kraken, Binance US y CoinGecko, consultadas por el servidor. Precios en vivo, no inventados. El simulador y las alertas usan dinero virtual y son solo una prueba educativa.</footer>
+      <footer>Fuente de datos: APIs públicas de Coinbase, Kraken, Binance US y CoinGecko, consultadas por el servidor. Precios en vivo, no inventados. El simulador, la liga, las misiones y las alertas usan dinero virtual y son solo una prueba educativa. {APP_URL}</footer>
     </div>
   );
 }
