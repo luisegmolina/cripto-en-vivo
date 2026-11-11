@@ -38,6 +38,60 @@ exchanges**, y el frontend (React) solo habla con ese servidor en
   el log solo avisa la primera vez, no cada 5 s. Caché de markets: 15 s;
   el cliente sondea las pestañas cada 10 s.
 
+## Novedades v8: la señal de trading al frente (11-nov-2026)
+
+El objetivo de la app es TRADING: que el usuario vea en 5 segundos si
+compra o vende. Por eso la señal es ahora lo primero de la página,
+antes del gráfico y antes de todo lo demás (liga, screener, mercado
+PRO… que siguen intactos, solo más abajo).
+
+Todo sigue siendo dinero VIRTUAL y prueba educativa. **Nada de esto es
+una recomendación de inversión ni una garantía de ganancias.**
+
+### 1. Veredicto gigante
+Arriba del gráfico, imposible de pasar por alto: **COMPRAR** (verde) /
+**VENDER** (rojo) / **ESPERAR** (gris), con puntuación −100 a +100,
+fuerza (Débil/Moderada/Fuerte/Muy fuerte) y confianza en % (índice de
+confluencia, NO una probabilidad de acierto).
+
+### 2. Confluencia entre temporalidades
+La señal se calcula en **1m, 5m, 15m y 1h** (velas de `/api/candles`) y
+se muestra en una tabla: cada timeframe dice Comprar/Vender/Esperar.
+La de 1h pesa más que la de 1m en el veredicto final. Si hay señales
+claras de compra Y de venta a la vez, la app lo dice en grande:
+**"SEÑALES EN CONFLICTO, esperar"**.
+
+### 3. Por qué
+Debajo del veredicto, las 3–4 razones que lo sostienen en lenguaje
+simple, cada una con icono verde/rojo: "RSI 32, sobreventa", "MACD
+cruzó al alza", "Precio por debajo de EMA 50", "Envolvente bajista"…
+
+### 4. Plan de operación (sugerido, educativo)
+Con el precio actual: entrada sugerida (el precio actual), stop loss
+a 1 ATR y take profit a 2 ATR (ratio 1:2), calculados con la
+volatilidad real de las últimas 14 velas. Si el veredicto es ESPERAR,
+no hay entrada: se muestran los niveles y el plan dice que se activa
+solo si el precio rompe un nivel con señal clara. Botón "Operar según
+la señal (virtual)" que compra/vende con dinero virtual.
+
+### 5. Historial de señales
+Las últimas 10 señales claras del intervalo seleccionado, con hora,
+precio, lo que pasó en la vela siguiente y si **acertó o falló**.
+Ejemplo real medido el 11-nov: en BTC 1h acertó 6 de 10; en BTC 1m
+solo 2 de 10 — las señales a corto plazo fallan mucho, y la app lo
+muestra en vez de esconderlo.
+
+### 6. Alerta cuando cambia la señal
+Cuando el veredicto cambia de COMPRAR a VENDER o viceversa: alerta en
+pantalla + notificación del navegador (si tiene permiso) y queda en el
+historial de alertas y en `cev_signal_changes_v1` (local).
+
+### 7. Orden de la página
+Selector de activo/moneda → **veredicto + por qué + plan +
+confluencia + historial** → gráfico → análisis detallado → backtest →
+screener → cartera virtual → liga → misiones → compartir → alertas →
+logros → perfil, panel PRO, ánimo y estado del servidor (al final).
+
 ## Novedades v7: Panel PRO, liga semanal, misiones, PWA y más (11-nov-2026)
 
 App pública en **https://cripto-en-vivo.onrender.com** (Render, plan gratis;

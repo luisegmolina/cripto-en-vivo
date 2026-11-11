@@ -4,6 +4,7 @@ import { analyze, emaSeries, bollingerSeries, rsiSeries } from './analysis.js';
 import { updateLastCandle, candlesSignature, mergeServerCandles } from './liveCandle.js';
 import { marketCapProxy, btcDominanceProxy, fearGreedEstimate, heatToday, isoWeekKey, rivalsForWeek } from './marketPro.js';
 import { backtestSignal } from './backtest.js';
+import { multiTfVerdict, reasonsFor, tradePlan, signalHistory, VERDICT_TFS } from './verdict.js';
 import { MISSIONS, levelForXp, xpIntoLevel, XP_PER_LEVEL } from './missions.js';
 import { screenOpportunities } from './screener.js';
 import { shareText, whatsappUrl, drawShareCard, APP_URL } from './shareCard.js';
@@ -18,7 +19,7 @@ const ASSETS = [
 const INTERVALS = ['1m', '5m', '15m', '1h', '6h', '1d'];
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v7 — Panel PRO + liga semanal + misiones + PWA';
+const VERSION_LABEL = 'v8 — Señal de trading al frente: COMPRAR / VENDER / ESPERAR';
 
 const ACHIEVEMENTS = [
   { id: 'primera_operacion', name: 'Primera operación virtual', desc: 'Compra o vende por primera vez con dinero virtual.' },
@@ -268,6 +269,24 @@ export default function App() {
   // cada tick), porque es el cálculo más pesado de la app.
   const lastCandleKey = candles.length ? `${candles.length}:${candles[candles.length - 1].time}` : 'empty';
   const backtest = useMemo(() => backtestSignal(candles), [lastCandleKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- v8: VEREDICTO multi-timeframe (1m, 5m, 15m, 1h) ---
+  const [mtfCandles, setMtfCandles] = useState({});
+  const mtfAnalysis = useMemo(() => {
+    const out = {};
+    for (const tf of VERDICT_TFS) {
+      const list = tf === candleInterval ? candles : mtfCandles[tf];
+      if (list && list.length >= 30) out[tf] = analyze(list);
+    }
+    return out;
+  }, [mtfCandles, candles, candleInterval]);
+  const mtfVerdict = useMemo(() => multiTfVerdict(mtfAnalysis), [mtfAnalysis]);
+  const verdictReasons = useMemo(() => reasonsFor(analysis), [analysis]);
+  const plan = useMemo(() => tradePlan(priceNowForPlan(), candles), [ticker, candles, mtfVerdict.verdict.key]);
+  const histSignals = useMemo(() => signalHistory(candles, 10), [lastCandleKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  function priceNowForPlan() {
+    return ticker?.price ?? markets.find((m) => m.symbol === symbol)?.price ?? null;
+  }
   const capProxy = useMemo(() => marketCapProxy(markets), [markets]);
   const btcDom = useMemo(() => btcDominanceProxy(markets), [markets]);
   const fearGreed = useMemo(() => fearGreedEstimate(markets, analysis.rsi), [markets, analysis.rsi]);
@@ -365,6 +384,27 @@ export default function App() {
     setBtcCandles([]);
   }, [symbol, currency, candleInterval]);
 
+  // v8: velas de 1m, 5m, 15m y 1h para la confluencia del veredicto.
+  // Se refrescan cada 20 s (no cada segundo: la señal no cambia a cada tick).
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      const settled = await Promise.allSettled(VERDICT_TFS.map((tf) => api(`/api/candles?symbol=${symbol}&currency=${currency}&interval=${tf}`)));
+      if (!alive) return;
+      const next = {};
+      settled.forEach((r, i) => {
+        if (r.status === 'fulfilled' && r.value.candles && r.value.candles.length) next[VERDICT_TFS[i]] = r.value.candles;
+      });
+      setMtfCandles((prev) => {
+        const sig = (o) => VERDICT_TFS.map((tf) => (o[tf] ? `${o[tf].length}:${o[tf][o[tf].length - 1]?.time}` : '')).join('|');
+        return sig(next) === sig(prev) ? prev : next;
+      });
+    };
+    load();
+    const t = setInterval(load, 20000);
+    return () => { alive = false; clearInterval(t); };
+  }, [symbol, currency]);
+
   // Velas de BTC para "comparar contra BTC" (solo cuando está activo).
   useEffect(() => {
     if (!compareBtc || symbol === 'BTC') { setBtcCandles([]); return undefined; }
@@ -398,19 +438,27 @@ export default function App() {
     if (fired) setPriceAlerts(next);
   }, [ticker, symbol, currency]);
 
-  // --- Alertas cuando cambia la señal ---
-  const signalLabel = analysis.label;
-  const signalScore = analysis.score;
+  // --- v8: ALERTA cuando el VEREDICTO cambia de COMPRAR a VENDER o viceversa ---
+  const prevVerdictKey = useRef(null);
+  const verdictKeyNow = mtfVerdict.verdict.key;
   useEffect(() => {
-    const sig = signalLabel;
-    if (sig !== 'Posible subida' && sig !== 'Posible bajada') { alertedKey.current = ''; return; }
-    const key = `${symbol}|${sig}|${signalScore}`;
-    if (key === alertedKey.current) return;
-    alertedKey.current = key;
-    const msg = `${symbol}: ${sig} (${analysis.score}, ${analysis.strength}) — ${new Date().toLocaleTimeString('es-US')}`;
+    const prev = prevVerdictKey.current;
+    prevVerdictKey.current = verdictKeyNow;
+    if (!prev) return; // primera carga: no es un cambio, no alertar
+    if (prev === verdictKeyNow) return;
+    const flips = (prev === 'buy' && verdictKeyNow === 'sell') || (prev === 'sell' && verdictKeyNow === 'buy');
+    const msg = flips
+      ? `🚨 CAMBIO DE SEÑAL ${symbol}: ${prev === 'buy' ? 'COMPRAR' : 'VENDER'} → ${verdictKeyNow === 'buy' ? 'COMPRAR' : 'VENDER'} (puntuación ${mtfVerdict.score}, confianza ${mtfVerdict.confidence}%) — ${new Date().toLocaleTimeString('es-US')}`
+      : `🔔 Señal ${symbol}: ahora ${mtfVerdict.verdict.label} (puntuación ${mtfVerdict.score}) — ${new Date().toLocaleTimeString('es-US')}`;
     setAlerts((a) => [msg, ...a].slice(0, 20));
-    notify('Cripto en Vivo', msg);
-  }, [signalLabel, signalScore, symbol]);
+    notify('Cripto en Vivo — cambio de señal', msg);
+    try {
+      const hist = JSON.parse(localStorage.getItem('cev_signal_changes_v1') || '[]');
+      hist.unshift({ time: new Date().toISOString(), symbol, from: prev, to: verdictKeyNow, score: mtfVerdict.score });
+      localStorage.setItem('cev_signal_changes_v1', JSON.stringify(hist.slice(0, 30)));
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [verdictKeyNow, symbol]);
 
   // --- Gráfico de velas: creación (una sola vez, con limpieza) ---
   useEffect(() => {
@@ -798,78 +846,7 @@ export default function App() {
 
       <p className="warn">⚠️ Prueba educativa con dinero VIRTUAL. Nada de esto es una recomendación de inversión, no hay dinero real ni registro obligatorio. Tu cartera, liga, misiones y alertas viven solo en este navegador.</p>
 
-      {/* Perfil local: apodo sin cuentas */}
-      <section className="card profile">
-        <h2>👤 Tu perfil local {nickname ? `— ${nickname}` : ''}</h2>
-        <p className="muted">Sin registro ni contraseña: solo un apodo guardado en este navegador, que se usa en la liga semanal y en la tarjeta para compartir. Nada se envía a ningún servidor.</p>
-        <div className="row">
-          <label>Apodo: <input type="text" maxLength={20} value={nicknameInput} placeholder="Ej.: Luis" onChange={(e) => setNicknameInput(e.target.value)} /></label>
-          <button onClick={saveNickname}>Guardar apodo</button>
-          {profileMsg && <span className="muted">{profileMsg}</span>}
-        </div>
-      </section>
-
-      {/* Panel de mercado PRO */}
-      <section className="card">
-        <h2>📊 Panel de mercado PRO</h2>
-        <div className="stats">
-          <div><span>Dominio de BTC (aprox.)</span><b>{btcDom != null ? `${btcDom.toFixed(1)}%` : '—'}</b></div>
-          <div><span>Capitalización total (aprox.)</span><b>{capProxy != null ? `${CUR[currency]}${(capProxy / 1e9).toFixed(1)} mil M` : '—'}</b></div>
-          <div><span>Miedo y codicia (estimado propio)</span><b style={{ color: fgColor }}>{fearGreed ? `${fearGreed.value} / 100 · ${fearGreed.label}` : '—'}</b></div>
-          <div><span>Qué está caliente hoy</span><b className={heat.length && heat[0].change24h >= 0 ? 'up' : 'down'}>{heat.length ? `▲ ${heat[0].symbol} +${heat[0].change24h.toFixed(2)}%` : '—'}</b></div>
-        </div>
-        <p className="muted">Dominio y capitalización son un proxy calculado aquí con precio × volumen 24h de las 10 criptos — NO son los datos oficiales de capitalización (precio × oferta en circulación). El índice de miedo y codicia es un estimado propio con amplitud, impulso y RSI; NO es el índice oficial de alternative.me.</p>
-        {heat.length > 0 && (
-          <div className="heatmap" aria-label="Mapa de calor de las 10 criptos">
-            {heat.map((m) => {
-              const v = m.change24h ?? 0;
-              const intensity = Math.min(1, Math.abs(v) / 6);
-              const bg = v >= 0 ? `rgba(34,197,94,${0.15 + intensity * 0.65})` : `rgba(239,68,68,${0.15 + intensity * 0.65})`;
-              return (
-                <button key={m.symbol} className="heat-cell" style={{ background: bg }} onClick={() => setSymbol(m.symbol)} title={`${m.symbol}: ${v >= 0 ? '+' : ''}${v.toFixed(2)}% en 24 h — toca para ver su gráfico`}>
-                  <b>{m.symbol}</b><span>{v >= 0 ? '+' : ''}{v.toFixed(2)}%</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* Racha + ánimo del mercado */}
-      <section className="card mood">
-        <div className="mood-row">
-          <div><span className="muted">Racha abriendo la app</span><b className="streak">🔥 {streak.days} día{streak.days === 1 ? '' : 's'} · {streak.totalDays} días en total</b></div>
-          <div><span className="muted">Ánimo del mercado (10 criptos, 24 h)</span><b>{mood}</b></div>
-          <div><span className="muted">Suben / bajan</span><b><span className="up">{upCount} ▲</span> / <span className="down">{downCount} ▼</span>{avgChange != null ? ` · media ${avgChange >= 0 ? '+' : ''}${avgChange.toFixed(2)}%` : ''}</b></div>
-        </div>
-        <div className="mood-bar" aria-hidden="true">
-          <div className="mood-up" style={{ width: `${markets.length ? (upCount / markets.length) * 100 : 50}%` }} />
-        </div>
-        {(topGainer || topLoser) && (
-          <p className="muted">Top del día: <b className="up">▲ {topGainer.symbol} {topGainer.change24h != null ? `+${topGainer.change24h.toFixed(2)}%` : ''}</b> · Peor del día: <b className="down">▼ {topLoser.symbol} {topLoser.change24h != null ? `${topLoser.change24h.toFixed(2)}%` : ''}</b></p>
-        )}
-      </section>
-
       {error && <div className="error">No se pudo cargar desde el servidor: {error}. Revisa que el servidor esté corriendo (npm run dev en la carpeta raíz).</div>}
-
-      <section className="card status">
-        <h2>Estado del servidor</h2>
-        <div className="stats">
-          <div><span>Servidor</span><b className={serverStatus.startsWith('OK') ? 'up' : serverStatus.startsWith('FALLO') ? 'down' : ''}>{serverStatus}</b></div>
-          <div><span>Última actualización</span><b>{updatedAt ? new Date(updatedAt).toLocaleTimeString('es-US') : '— (nunca llegó un precio)'}</b></div>
-          <div><span>Fuente del precio</span><b>{source || '—'}</b></div>
-          <div><span>Latencia del último fetch</span><b>{latencyMs != null ? `${latencyMs} ms` : '—'}</b></div>
-        </div>
-        {(error || marketsError || candlesError) && (
-          <p className="errtext">Último error exacto — precio: {error || 'ninguno'} · pestañas: {marketsError || 'ninguno'} · velas: {candlesError || 'ninguno'}</p>
-        )}
-        <div className="row">
-          <button onClick={testServer}>Probar servidor</button>
-          <span className="muted">Llama a /api/health y a /api/debug y muestra el resultado aquí.</span>
-        </div>
-        {testResult && <p className="errtext">{testResult}</p>}
-        {debugInfo && <pre className="errtext">{debugInfo}</pre>}
-      </section>
 
       <section className="card">
         <h2>Mercados</h2>
@@ -890,6 +867,95 @@ export default function App() {
             );
           })}
         </div>
+      </section>
+
+      {/* v8: VEREDICTO — lo primero que ve el usuario: ¿compro o vendo? */}
+      <section className={`card verdict-card verdict-${mtfVerdict.verdict.key} ${mtfVerdict.conflict ? 'verdict-conflict' : ''}`} aria-label="Veredicto de trading">
+        <p className="verdict-kicker">SEÑAL PARA {symbol} · CONFLUENCIA 1m / 5m / 15m / 1h · EDUCATIVO, NO ES RECOMENDACIÓN</p>
+        <div className="verdict-main">
+          <div className="verdict-word">{mtfVerdict.verdict.icon} {mtfVerdict.verdict.label}</div>
+          <div className="verdict-meta">
+            <span>Puntuación: <b>{mtfVerdict.score}</b> / −100 a +100</span>
+            <span>Fuerza: <b>{mtfVerdict.verdict.key === 'wait' && !mtfVerdict.conflict ? 'Débil' : mtfVerdict.score >= 60 || mtfVerdict.score <= -60 ? 'Muy fuerte' : Math.abs(mtfVerdict.score) >= 40 ? 'Fuerte' : Math.abs(mtfVerdict.score) >= 25 ? 'Moderada' : 'Débil'}</b></span>
+            <span>Confianza (confluencia): <b>{mtfVerdict.confidence}%</b></span>
+          </div>
+        </div>
+        {mtfVerdict.conflict ? (
+          <p className="conflict-banner">⚠️ SEÑALES EN CONFLICTO: unos timeframes dicen COMPRAR y otros VENDER. No hay acuerdo — esperar es la decisión prudente.</p>
+        ) : (
+          <p className="muted">Confianza = índice de confluencia (fuerza de la señal + cuántos timeframes coinciden). NO es una probabilidad de ganar: un 90% no significa que ganes el 90% de las veces.</p>
+        )}
+        <div className="score-bar" aria-hidden="true"><div style={{ width: `${Math.round(((mtfVerdict.score + 100) / 200) * 100)}%`, background: mtfVerdict.verdict.key === 'buy' ? '#22c55e' : mtfVerdict.verdict.key === 'sell' ? '#ef4444' : '#94a3b8' }} /></div>
+        <div className="verdict-price">Precio ahora: <b>{ticker?.price ? fmt(ticker.price, currency) : '—'}</b>{change24 != null ? <span className={change24 >= 0 ? 'up' : 'down'}> {change24 >= 0 ? '▲' : '▼'} {change24.toFixed(2)}% 24h</span> : null}</div>
+
+        <h3>¿Por qué dice esto?</h3>
+        {verdictReasons.length > 0 ? (
+          <ul className="reasons">
+            {verdictReasons.map((r, i) => (
+              <li key={i} className={`reason-${r.dir}`}><b>{r.icon}</b> {r.text}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="muted">Cargando indicadores para explicar la señal…</p>
+        )}
+
+        <h3>Plan de operación — sugerido, educativo</h3>
+        {plan ? (
+          <div>
+            <div className="stats plan-stats">
+              <div><span>Entrada sugerida</span><b>{plan.entry ? fmt(plan.entry, currency) : 'Sin entrada: ESPERAR'}</b></div>
+              <div><span>Stop loss sugerido</span><b>{fmt(plan.stopLoss, currency)}</b></div>
+              <div><span>Take profit sugerido</span><b>{fmt(plan.takeProfit, currency)}</b></div>
+              <div><span>Ratio riesgo/beneficio</span><b>1 : {plan.rr}</b></div>
+            </div>
+            <p className="muted">{plan.note} Stop a 1 ATR ({fmt(plan.atr, currency)}) y objetivo a 2 ATR, calculados con la volatilidad real de las últimas 14 velas. Esto es un ejemplo educativo con dinero virtual: si operas con dinero real, el riesgo es tuyo y puedes perderlo todo.</p>
+            <div className="row">
+              <button onClick={() => { if (mtfVerdict.verdict.key === 'buy') doTrade('buy'); else if (mtfVerdict.verdict.key === 'sell') doTrade('sell'); else setPaperMsg('El veredicto es ESPERAR: no hay operación sugerida ahora.'); }}>Operar según la señal (virtual)</button>
+              <button onClick={() => { setAlertTarget(String(Math.round((ticker?.price || 0) * (mtfVerdict.verdict.key === 'sell' ? 0.98 : 1.02)))); setPaperMsg('Precio objetivo puesto en el formulario de alertas de abajo: complétalo y pulsa "Añadir alerta".'); }}>Crear alerta de este precio</button>
+            </div>
+          </div>
+        ) : (
+          <p className="muted">Calculando el plan con la volatilidad reciente…</p>
+        )}
+
+        <h3>Confluencia entre temporalidades</h3>
+        <table className="league-table mtf-table">
+          <thead><tr><th>Temporalidad</th><th>Señal</th><th>Puntuación</th></tr></thead>
+          <tbody>
+            {mtfVerdict.rows.map((r) => (
+              <tr key={r.tf}>
+                <td><b>{r.tf}</b></td>
+                <td className={r.key === 'buy' ? 'up' : r.key === 'sell' ? 'down' : ''}><b>{r.key === 'buy' ? '▲ COMPRAR' : r.key === 'sell' ? '▼ VENDER' : r.key === 'wait' ? '● ESPERAR' : '— Sin datos'}</b></td>
+                <td>{r.score != null ? r.score : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="muted">La temporalidad de 1h pesa más que la de 1m en el veredicto final. Si se contradicen, el veredicto es ESPERAR.</p>
+      </section>
+
+      {/* v8: HISTORIAL DE SEÑALES — ¿sirvió la señal? */}
+      <section className="card">
+        <h2>📜 Historial de señales — {symbol} ({candleInterval})</h2>
+        <p className="muted">Las últimas señales claras y lo que pasó en la vela siguiente. Si la señal decía COMPRAR y el precio subió, cuenta como acierto. El pasado no predice el futuro.</p>
+        {histSignals.length > 0 ? (
+          <table className="league-table">
+            <thead><tr><th>Hora</th><th>Señal</th><th>Precio</th><th>Después</th><th>Resultado</th></tr></thead>
+            <tbody>
+              {histSignals.map((h, i) => (
+                <tr key={i}>
+                  <td>{new Date(h.time * 1000).toLocaleTimeString('es-US')}</td>
+                  <td className={h.key === 'buy' ? 'up' : 'down'}><b>{h.key === 'buy' ? '▲ COMPRAR' : '▼ VENDER'}</b> ({h.score})</td>
+                  <td>{fmt(h.price, currency)}</td>
+                  <td className={h.changePct >= 0 ? 'up' : 'down'}>{h.changePct >= 0 ? '+' : ''}{h.changePct.toFixed(2)}%</td>
+                  <td><b>{h.won ? '✅ Acertó' : '❌ Falló'}</b></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="muted">Cargando velas para el historial de señales…</p>
+        )}
       </section>
 
       <section className={`card ${chartFull ? 'chart-full' : ''}`}>
@@ -1125,6 +1191,81 @@ export default function App() {
           ))}
         </div>
       </section>
+
+      {/* Perfil local: apodo sin cuentas */}
+      <section className="card profile">
+        <h2>👤 Tu perfil local {nickname ? `— ${nickname}` : ''}</h2>
+        <p className="muted">Sin registro ni contraseña: solo un apodo guardado en este navegador, que se usa en la liga semanal y en la tarjeta para compartir. Nada se envía a ningún servidor.</p>
+        <div className="row">
+          <label>Apodo: <input type="text" maxLength={20} value={nicknameInput} placeholder="Ej.: Luis" onChange={(e) => setNicknameInput(e.target.value)} /></label>
+          <button onClick={saveNickname}>Guardar apodo</button>
+          {profileMsg && <span className="muted">{profileMsg}</span>}
+        </div>
+      </section>
+
+
+      {/* Panel de mercado PRO */}
+      <section className="card">
+        <h2>📊 Panel de mercado PRO</h2>
+        <div className="stats">
+          <div><span>Dominio de BTC (aprox.)</span><b>{btcDom != null ? `${btcDom.toFixed(1)}%` : '—'}</b></div>
+          <div><span>Capitalización total (aprox.)</span><b>{capProxy != null ? `${CUR[currency]}${(capProxy / 1e9).toFixed(1)} mil M` : '—'}</b></div>
+          <div><span>Miedo y codicia (estimado propio)</span><b style={{ color: fgColor }}>{fearGreed ? `${fearGreed.value} / 100 · ${fearGreed.label}` : '—'}</b></div>
+          <div><span>Qué está caliente hoy</span><b className={heat.length && heat[0].change24h >= 0 ? 'up' : 'down'}>{heat.length ? `▲ ${heat[0].symbol} +${heat[0].change24h.toFixed(2)}%` : '—'}</b></div>
+        </div>
+        <p className="muted">Dominio y capitalización son un proxy calculado aquí con precio × volumen 24h de las 10 criptos — NO son los datos oficiales de capitalización (precio × oferta en circulación). El índice de miedo y codicia es un estimado propio con amplitud, impulso y RSI; NO es el índice oficial de alternative.me.</p>
+        {heat.length > 0 && (
+          <div className="heatmap" aria-label="Mapa de calor de las 10 criptos">
+            {heat.map((m) => {
+              const v = m.change24h ?? 0;
+              const intensity = Math.min(1, Math.abs(v) / 6);
+              const bg = v >= 0 ? `rgba(34,197,94,${0.15 + intensity * 0.65})` : `rgba(239,68,68,${0.15 + intensity * 0.65})`;
+              return (
+                <button key={m.symbol} className="heat-cell" style={{ background: bg }} onClick={() => setSymbol(m.symbol)} title={`${m.symbol}: ${v >= 0 ? '+' : ''}${v.toFixed(2)}% en 24 h — toca para ver su gráfico`}>
+                  <b>{m.symbol}</b><span>{v >= 0 ? '+' : ''}{v.toFixed(2)}%</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+
+      {/* Racha + ánimo del mercado */}
+      <section className="card mood">
+        <div className="mood-row">
+          <div><span className="muted">Racha abriendo la app</span><b className="streak">🔥 {streak.days} día{streak.days === 1 ? '' : 's'} · {streak.totalDays} días en total</b></div>
+          <div><span className="muted">Ánimo del mercado (10 criptos, 24 h)</span><b>{mood}</b></div>
+          <div><span className="muted">Suben / bajan</span><b><span className="up">{upCount} ▲</span> / <span className="down">{downCount} ▼</span>{avgChange != null ? ` · media ${avgChange >= 0 ? '+' : ''}${avgChange.toFixed(2)}%` : ''}</b></div>
+        </div>
+        <div className="mood-bar" aria-hidden="true">
+          <div className="mood-up" style={{ width: `${markets.length ? (upCount / markets.length) * 100 : 50}%` }} />
+        </div>
+        {(topGainer || topLoser) && (
+          <p className="muted">Top del día: <b className="up">▲ {topGainer.symbol} {topGainer.change24h != null ? `+${topGainer.change24h.toFixed(2)}%` : ''}</b> · Peor del día: <b className="down">▼ {topLoser.symbol} {topLoser.change24h != null ? `${topLoser.change24h.toFixed(2)}%` : ''}</b></p>
+        )}
+      </section>
+
+
+      <section className="card status">
+        <h2>Estado del servidor</h2>
+        <div className="stats">
+          <div><span>Servidor</span><b className={serverStatus.startsWith('OK') ? 'up' : serverStatus.startsWith('FALLO') ? 'down' : ''}>{serverStatus}</b></div>
+          <div><span>Última actualización</span><b>{updatedAt ? new Date(updatedAt).toLocaleTimeString('es-US') : '— (nunca llegó un precio)'}</b></div>
+          <div><span>Fuente del precio</span><b>{source || '—'}</b></div>
+          <div><span>Latencia del último fetch</span><b>{latencyMs != null ? `${latencyMs} ms` : '—'}</b></div>
+        </div>
+        {(error || marketsError || candlesError) && (
+          <p className="errtext">Último error exacto — precio: {error || 'ninguno'} · pestañas: {marketsError || 'ninguno'} · velas: {candlesError || 'ninguno'}</p>
+        )}
+        <div className="row">
+          <button onClick={testServer}>Probar servidor</button>
+          <span className="muted">Llama a /api/health y a /api/debug y muestra el resultado aquí.</span>
+        </div>
+        {testResult && <p className="errtext">{testResult}</p>}
+        {debugInfo && <pre className="errtext">{debugInfo}</pre>}
+      </section>
+
 
       <footer>Fuente de datos: APIs públicas de Coinbase, Kraken, Binance US y CoinGecko, consultadas por el servidor. Precios en vivo, no inventados. El simulador, la liga, las misiones y las alertas usan dinero virtual y son solo una prueba educativa. {APP_URL}</footer>
     </div>

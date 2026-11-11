@@ -21,3 +21,14 @@ Fecha: 2026-11-11
   y en el README (sección "Qué es real y qué es demo/local").
 - Probado: build del cliente sin errores; servidor local con curl a
   /api/health, /api/ticker?symbol=BTC&currency=USD y /api/markets.
+
+- v8 (2026-11-11): LA SEÑAL AL FRENTE. Veredicto gigante COMPRAR /
+  VENDER / ESPERAR con puntuación, fuerza y confianza (confluencia);
+  confluencia 1m/5m/15m/1h con aviso de "señales en conflicto";
+  "¿Por qué?" en lenguaje simple; plan de operación educativo
+  (entrada, stop 1 ATR, take profit 2 ATR, ratio 1:2); historial de
+  señales con acierto/fallo (BTC 1h 6/10, BTC 1m 2/10 medido el 11-nov);
+  alerta cuando el veredicto cambia de COMPRAR a VENDER o viceversa.
+  Página reordenada: veredicto primero, gráfico después, resto después.
+  Nada de v7 se quitó. Todo dinero VIRTUAL, prueba educativa, sin
+  recomendación de inversión ni garantía de ganancias.
