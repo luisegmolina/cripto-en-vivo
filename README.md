@@ -38,6 +38,17 @@ exchanges**, y el frontend (React) solo habla con ese servidor en
   el log solo avisa la primera vez, no cada 5 s. Caché de markets: 15 s;
   el cliente sondea las pestañas cada 10 s.
 
+## Novedades v10: correcciones de las capturas del 10-nov 20:56 (11-nov-2026)
+
+Luis mandó capturas de la v9 en vivo y salieron 5 fallos. Todos corregidos:
+
+1. **Liga con código roto:** los rivales salían como `CriptoManía <span className="muted">(demo)</span>` porque en `App.jsx` el span estaba dentro de un string, no como JSX. Ahora es JSX real y se ve "CriptoManía (demo)" con estilo, sin código visible.
+2. **Screener vacío al entrar:** antes solo se calculaba al pulsar "Actualizar screener". Ahora se calcula SOLO al cargar la página (en cuanto llegan las 10 pestañas); el botón queda solo para refrescar.
+3. **Alertas viejas duplicadas:** las 4 entradas de $73.53 (7:56–8:00 p.m.) eran de localStorage anterior a v9. Nueva migración al cargar (`dedupePriceAlerts` en `client/src/alerts.js`): mismo activo+precio+dirección -> solo queda la más reciente, marcada como sonada. Las 4 viejas quedan en 2 (1 por encima + 1 por debajo).
+4. **Backtest e historial seguían en 1m en las capturas:** el intervalo al entrar ya era 1h, pero si el usuario tocaba 1m en el gráfico, el historial y el backtest lo seguían. Ahora SIEMPRE usan las velas de 1h (las de la confluencia, que ya se traen cada 20 s), y al entrar el intervalo es 1h en todas partes; el aviso "1m es ruido" solo sale junto al gráfico si se cambia a 1m a mano.
+5. **Panel PRO "No disponible":** en Render la IP compartida está casi siempre en 429 en CoinGecko. `/api/global` ahora tiene respaldo CoinPaprika (gratis, sin clave): si CoinGecko falla o está en pausa, devuelve capitalización total y dominio de BTC de CoinPaprika, marcados como aproximados. Si no hay ninguna fuente, la respuesta trae `retryInSeconds` y la app dice cuándo se reintentará.
+6. Nada de v7/v8/v9 se quitó. Pruebas en `tests-v10.mjs`: 26 de 26 pasaron con datos reales del servidor local (backtest BTC 1h: 10 de 18, 56%).
+
 ## Novedades v9: correcciones del PDF del 10-nov (11-nov-2026)
 
 Luis imprimió la app a PDF y salieron 8 fallos visibles. Todos corregidos:

@@ -1,4 +1,4 @@
-Cripto en Vivo — VERSIÓN v7
+Cripto en Vivo — VERSIÓN v10
 Fecha: 2026-11-11
 - v4 en la interfaz: "Cartera virtual + gráfico en vivo".
 - v5: configuración de despliegue (vercel.json, api/, render.yaml).
@@ -49,3 +49,18 @@ Fecha: 2026-11-11
   print: una columna, fondo blanco, sin ticker ni gráficos, sin
   secciones de liga/misiones/logros que se solapaban. Pruebas
   tests-v9.mjs: 21/21 con datos reales.
+
+- v10 (2026-11-11): CORRECCIONES DE LAS CAPTURAS 20:56. (1) Liga: el
+  span "(demo)" estaba como string en App.jsx y se veía el código en
+  pantalla; ahora es JSX real. (2) Screener: se calcula SOLO al cargar
+  (al llegar las 10 pestañas); el botón queda para refrescar. (3)
+  Migración de alertas al cargar (dedupePriceAlerts): las 4 viejas de
+  $73.53 quedan en 2 (1 por encima + 1 por debajo), la más reciente
+  marcada como sonada. (4) Backtest e historial SIEMPRE en 1h (velas
+  de la confluencia); al entrar el intervalo es 1h en todas partes y
+  el aviso "1m es ruido" solo sale junto al gráfico si se cambia a 1m
+  a mano. (5) /api/global con respaldo CoinPaprika cuando CoinGecko da
+  429 (muy frecuente en Render): capitalización y dominio marcados
+  como aproximados; si no hay fuente, retryInSeconds y la app dice
+  cuándo se reintentará. Pruebas tests-v10.mjs: 26/26 con datos reales
+  (backtest BTC 1h: 10 de 18, 56%).

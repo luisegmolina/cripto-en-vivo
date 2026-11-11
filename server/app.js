@@ -400,26 +400,49 @@ app.get('/api/global', async (req, res) => {
   // límite gratis de CoinGecko. Si CoinGecko falla o da 429, se
   // devuelve available:false (503) y el cliente muestra "no disponible",
   // nunca un número inventado.
+  // v10: RESPALDO CoinPaprika. En Render la IP compartida está casi
+  // siempre en 429 en CoinGecko, así que el panel PRO salía vacío
+  // ("No disponible") en las capturas de Luis. Si CoinGecko está en
+  // pausa o falla, se intenta CoinPaprika /v1/global (gratis, sin
+  // clave): market_cap_usd + bitcoin_dominance_percentage. La
+  // respuesta indica la fuente y si es aproximada, y cuando no hay
+  // ninguna fuente devuelve retryInSeconds (cuándo se reintentará).
   const key = 'global';
   const hit = getCache(key, 300000);
   if (hit) return res.json(hit);
-  if (isCoolingDown('CoinGecko')) {
-    return res.status(503).json({ available: false, source: 'CoinGecko', error: `CoinGecko en pausa por 429 (${cooldownLeftSec('CoinGecko')} s restantes)` });
+  const tryCoinPaprika = async () => {
+    if (isCoolingDown('CoinPaprika')) return null;
+    try {
+      const j = await fetchJSON('https://api.coinpaprika.com/v1/global');
+      const totalMarketCapUsd = Number(j.market_cap_usd);
+      const btcDominance = Number(j.bitcoin_dominance_percentage);
+      if (!totalMarketCapUsd) throw new Error('CoinPaprika /global sin capitalización total');
+      markSuccess('CoinPaprika');
+      return { available: true, source: 'CoinPaprika (respaldo)', approx: true, updatedAt: new Date().toISOString(), totalMarketCapUsd, btcDominance: btcDominance || null };
+    } catch (e) {
+      logSourceFail('CoinPaprika', 'global', e);
+      return null;
+    }
+  };
+  if (!isCoolingDown('CoinGecko')) {
+    try {
+      const j = await fetchJSON('https://api.coingecko.com/api/v3/global');
+      const d = j.data || {};
+      const totalMarketCapUsd = d.total_market_cap && Number(d.total_market_cap.usd);
+      const btcDominance = d.market_cap_percentage && Number(d.market_cap_percentage.btc);
+      if (!totalMarketCapUsd) throw new Error('CoinGecko /global sin capitalización total');
+      markSuccess('CoinGecko');
+      const out = { available: true, source: 'CoinGecko', updatedAt: new Date().toISOString(), totalMarketCapUsd, btcDominance: btcDominance || null };
+      setCache(key, out);
+      return res.json(out);
+    } catch (e) {
+      logSourceFail('CoinGecko', 'global', e);
+    }
   }
-  try {
-    const j = await fetchJSON('https://api.coingecko.com/api/v3/global');
-    const d = j.data || {};
-    const totalMarketCapUsd = d.total_market_cap && Number(d.total_market_cap.usd);
-    const btcDominance = d.market_cap_percentage && Number(d.market_cap_percentage.btc);
-    if (!totalMarketCapUsd) throw new Error('CoinGecko /global sin capitalización total');
-    markSuccess('CoinGecko');
-    const out = { available: true, source: 'CoinGecko', updatedAt: new Date().toISOString(), totalMarketCapUsd, btcDominance: btcDominance || null };
-    setCache(key, out);
-    res.json(out);
-  } catch (e) {
-    logSourceFail('CoinGecko', 'global', e);
-    res.status(503).json({ available: false, source: 'CoinGecko', error: String(e.message || e) });
-  }
+  const fb = await tryCoinPaprika();
+  if (fb) { setCache(key, fb); return res.json(fb); }
+  const retryInSeconds = Math.max(cooldownLeftSec('CoinGecko'), cooldownLeftSec('CoinPaprika'), 60);
+  res.status(503).json({ available: false, source: 'CoinGecko + CoinPaprika', retryInSeconds, error: 'CoinGecko en pausa por 429 y el respaldo tampoco respondió' });
 });
 app.get('/api/ticker', async (req, res) => {
   const a = assetOf(req.query.symbol || 'BTC');

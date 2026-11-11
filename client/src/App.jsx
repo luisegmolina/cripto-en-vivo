@@ -7,7 +7,7 @@ import { backtestSignal } from './backtest.js';
 import { multiTfVerdict, reasonsFor, tradePlan, signalHistory, VERDICT_TFS } from './verdict.js';
 import { MISSIONS, levelForXp, xpIntoLevel, XP_PER_LEVEL } from './missions.js';
 import { screenOpportunities } from './screener.js';
-import { shouldFireAlert, ALERT_COOLDOWN_MS } from './alerts.js';
+import { shouldFireAlert, ALERT_COOLDOWN_MS, dedupePriceAlerts } from './alerts.js';
 import { shareText, whatsappUrl, drawShareCard, APP_URL } from './shareCard.js';
 
 const ASSETS = [
@@ -20,7 +20,7 @@ const ASSETS = [
 const INTERVALS = ['1m', '5m', '15m', '1h', '6h', '1d'];
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v9 — Señal al frente, sin entrada si es ESPERAR';
+const VERSION_LABEL = 'v10 — Liga sin código roto, screener automático, alertas sin duplicados, 1h en todo, respaldo CoinPaprika';
 
 const ACHIEVEMENTS = [
   { id: 'primera_operacion', name: 'Primera operación virtual', desc: 'Compra o vende por primera vez con dinero virtual.' },
@@ -117,10 +117,12 @@ export default function App() {
   // Antes se llamaba [interval, setInterval] y eso eclipsaba el
   // setInterval global y causaba el bucle "Maximum update depth exceeded".
   // Nunca nombrar un setter setInterval.
-  // v9: el intervalo por defecto es 1h, no 1m. El 1m es ruido: la señal
-  // acierta poco ahí (en la medición del 10-nov, BTC 1m acertó 2 de 10)
-  // y el historial/backtest con 1m ponían el peor ejemplo al frente.
+  // v10: al entrar, el intervalo es SIEMPRE 1h. No se persiste la
+  // selección entre sesiones: si en la sesión anterior se quedó en
+  // 1m (o quedó guardado un '1m' viejo), al cargar se vuelve a 1h.
+  // El aviso "1m es ruido" solo sale si el usuario cambia a 1m a mano.
   const [candleInterval, setCandleInterval] = useState('1h');
+  useEffect(() => { setCandleInterval('1h'); }, []);
   const [markets, setMarkets] = useState([]);
   const [ticker, setTicker] = useState(null);
   const [candles, setCandles] = useState([]);
@@ -172,7 +174,12 @@ export default function App() {
   const [portfolio, setPortfolio] = useState(() => loadLS('cev_portfolio_v1', { cash: START_CASH, holdings: {}, trades: [] }));
   const [paperAmount, setPaperAmount] = useState('100');
   const [paperMsg, setPaperMsg] = useState('');
-  const [priceAlerts, setPriceAlerts] = useState(() => loadLS('cev_price_alerts_v1', []));
+  // v10: migración al cargar. Las alertas guardadas antes de v9 no
+  // tenían cooldown ni anti-duplicados: en el navegador de Luis
+  // quedaron 4 entradas de la misma alerta (BTC por encima de $73.53).
+  // dedupePriceAlerts deja solo la más reciente por activo+precio+
+  // dirección y, si alguna copia ya sonó, la que queda queda sonada.
+  const [priceAlerts, setPriceAlerts] = useState(() => dedupePriceAlerts(loadLS('cev_price_alerts_v1', [])));
   const [alertTarget, setAlertTarget] = useState('');
   const [alertDir, setAlertDir] = useState('above');
   const [streak, setStreak] = useState(() => loadLS('cev_streak_v1', { days: 0, totalDays: 0, lastVisit: '' }));
@@ -275,10 +282,12 @@ export default function App() {
   }, [symbol]);
 
   const analysis = useMemo(() => analyze(candles), [candles]);
-  // El backtest solo se recalcula cuando llega una vela nueva (no con
-  // cada tick), porque es el cálculo más pesado de la app.
+  // El backtest y el historial se definen más abajo, tras mtfCandles:
+  // v10: SIEMPRE usan las velas de 1h, no las del intervalo del
+  // gráfico. Así, aunque el usuario cambie el gráfico a 1m para mirar
+  // velas, el backtest/historial siguen en 1h (el intervalo para
+  // decidir) y no vuelven a mostrar el 19% de 1m como ejemplo.
   const lastCandleKey = candles.length ? `${candles.length}:${candles[candles.length - 1].time}` : 'empty';
-  const backtest = useMemo(() => backtestSignal(candles), [lastCandleKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- v8: VEREDICTO multi-timeframe (1m, 5m, 15m, 1h) ---
   const [mtfCandles, setMtfCandles] = useState({});
@@ -293,7 +302,16 @@ export default function App() {
   const mtfVerdict = useMemo(() => multiTfVerdict(mtfAnalysis), [mtfAnalysis]);
   const verdictReasons = useMemo(() => reasonsFor(analysis), [analysis]);
   const plan = useMemo(() => tradePlan(priceNowForPlan(), candles, mtfVerdict.verdict.key), [ticker, candles, mtfVerdict.verdict.key]);
-  const histSignals = useMemo(() => signalHistory(candles, 10), [lastCandleKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // v10: backtest e historial SIEMPRE en 1h (velas de la confluencia,
+  // que ya se traen cada 20 s; si aún no llegaron, se usan las del
+  // gráfico solo cuando el intervalo seleccionado es 1h). Solo se
+  // recalculan cuando llega una vela nueva de 1h, no con cada tick.
+  const candles1h = (mtfCandles['1h'] && mtfCandles['1h'].length >= 32)
+    ? mtfCandles['1h']
+    : (candleInterval === '1h' ? candles : []);
+  const last1hKey = candles1h.length ? `${candles1h.length}:${candles1h[candles1h.length - 1].time}` : 'empty';
+  const backtest = useMemo(() => backtestSignal(candles1h), [last1hKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const histSignals = useMemo(() => signalHistory(candles1h, 10), [last1hKey]); // eslint-disable-line react-hooks/exhaustive-deps
   function priceNowForPlan() {
     return ticker?.price ?? markets.find((m) => m.symbol === symbol)?.price ?? null;
   }
@@ -302,14 +320,18 @@ export default function App() {
   // globalData queda en null y la UI muestra "No disponible", nunca un
   // número inventado (el proxy precio × volumen se eliminó).
   const [globalData, setGlobalData] = useState(null);
+  // v10: si no hay ninguna fuente, cuántos segundos faltan para el
+  // próximo reintento (lo devuelve /api/global como retryInSeconds).
+  const [globalRetrySec, setGlobalRetrySec] = useState(null);
   useEffect(() => {
     let alive = true;
     const load = async () => {
       try {
         const g = await api('/api/global');
-        if (alive && g && g.available) setGlobalData(g);
-        else if (alive) setGlobalData(null);
-      } catch { if (alive) setGlobalData(null); }
+        if (!alive) return;
+        if (g && g.available) { setGlobalData(g); setGlobalRetrySec(null); }
+        else { setGlobalData(null); setGlobalRetrySec(g && g.retryInSeconds != null ? g.retryInSeconds : 60); }
+      } catch { if (alive) { setGlobalData(null); setGlobalRetrySec(60); } }
     };
     load();
     const t = setInterval(load, 300000);
@@ -776,8 +798,14 @@ export default function App() {
     setPaperMsg(`Alerta creada: ${symbol} ${alertDir === 'above' ? 'por encima de' : 'por debajo de'} ${fmt(target, currency)}.`);
   };
 
-  // --- Screener: se calcula bajo demanda (10 llamadas a /api/candles, 1h) ---
-  const runScreener = async () => {
+  // --- Screener: se calcula SOLO al cargar la página (10 llamadas a /api/candles, 1h) ---
+  // v10: antes solo se calculaba al pulsar "Actualizar screener" y al
+  // entrar salía "Todavía no hay screener". Ahora se auto-ejecuta la
+  // primera vez que llegan las 10 pestañas de mercados; el botón queda
+  // solo para refrescar a mano.
+  const screenAutoRanRef = useRef(false);
+  const runScreener = async (marketsList) => {
+    const list = marketsList || markets;
     setScreenLoading(true);
     setScreenError('');
     try {
@@ -786,11 +814,17 @@ export default function App() {
       settled.forEach((r, i) => {
         if (r.status === 'fulfilled' && r.value.candles && r.value.candles.length) analyses[ASSETS[i].symbol] = analyze(r.value.candles);
       });
-      setScreenRows(screenOpportunities(markets, analyses));
+      setScreenRows(screenOpportunities(list, analyses));
       setScreenUpdatedAt(new Date().toLocaleTimeString('es-US'));
     } catch (e) { setScreenError(String(e.message || e)); }
     finally { setScreenLoading(false); }
   };
+  useEffect(() => {
+    if (screenAutoRanRef.current || markets.length < 10 || screenLoading) return;
+    screenAutoRanRef.current = true;
+    runScreener(markets);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [markets]);
 
   // --- Perfil local + liga privada + compartir ---
   const saveNickname = () => {
@@ -991,9 +1025,8 @@ export default function App() {
 
       {/* v8: HISTORIAL DE SEÑALES — ¿sirvió la señal? */}
       <section className="card">
-        <h2>📜 Historial de señales — {symbol} ({candleInterval})</h2>
-        <p className="muted">Las últimas señales claras y lo que pasó en la vela siguiente. Si la señal decía COMPRAR y el precio subió, cuenta como acierto. El pasado no predice el futuro.</p>
-        {candleInterval === '1m' && <p className="warn">⚠️ Estás viendo velas de 1 minuto: 1m es ruido, no apto para decidir. La señal cambia a cada segundo y acierta poco (BTC 1m acertó 2 de 10 en la medición del 10-nov). Para decidir, usa 1h.</p>}
+        <h2>📜 Historial de señales — {symbol} (1h)</h2>
+        <p className="muted">Las últimas señales claras y lo que pasó en la vela siguiente. Si la señal decía COMPRAR y el precio subió, cuenta como acierto. El pasado no predice el futuro. Siempre en 1h, el intervalo para decidir.</p>
         {histSignals.length > 0 ? (
           <table className="league-table">
             <thead><tr><th>Hora</th><th>Señal</th><th>Precio</th><th>Después</th><th>Resultado</th></tr></thead>
@@ -1029,6 +1062,7 @@ export default function App() {
         <div className="intervals">
           {INTERVALS.map((i) => <button key={i} className={candleInterval === i ? 'on' : ''} onClick={() => setCandleInterval(i)}>{i === '1h' ? '1H' : i === '1d' ? '1D' : i}</button>)}
         </div>
+        {candleInterval === '1m' && <p className="warn">⚠️ Velas de 1 minuto: 1m es ruido, no apto para decidir. La señal cambia a cada segundo y acierta poco (BTC 1m acertó 2 de 10 en la medición del 10-nov). Para decidir, usa 1h. El historial y el backtest de abajo siguen en 1h.</p>}
         <div className="row toggles">
           <button className={showEma ? 'on' : ''} onClick={() => setShowEma((v) => !v)}>EMA 20/50 {showEma ? '✓' : ''}</button>
           <button className={showBoll ? 'on' : ''} onClick={() => setShowBoll((v) => !v)}>Bollinger {showBoll ? '✓' : ''}</button>
@@ -1068,9 +1102,8 @@ export default function App() {
 
       {/* Backtest de señales */}
       <section className="card">
-        <h2>🧪 Backtest de señales — {symbol} ({candleInterval})</h2>
-        <p className="warn">⚠️ Prueba educativa sobre velas pasadas. Que una señal acertara antes NO significa que acierte mañana. Sin promesas.</p>
-        {candleInterval === '1m' && <p className="warn">⚠️ Backtest en 1 minuto: 1m es ruido, no apto para decidir. El backtest por defecto es 1h, donde la señal acierta más.</p>}
+        <h2>🧪 Backtest de señales — {symbol} (1h)</h2>
+        <p className="warn">⚠️ Prueba educativa sobre velas pasadas. Que una señal acertara antes NO significa que acierte mañana. Sin promesas. Siempre en 1h, el intervalo para decidir.</p>
         {backtest.total > 0 ? (
           <div>
             <p className="big-backtest">La señal acertó <b>{backtest.wins} de {backtest.total}</b> veces ({backtest.pct}%)</p>
@@ -1123,7 +1156,7 @@ export default function App() {
             </ul>
           </div>
         )}
-        {screenRows.opportunities.length === 0 && screenRows.rest.length === 0 && !screenLoading && <p className="muted">Todavía no hay screener: pulsa "Actualizar screener".</p>}
+        {screenRows.opportunities.length === 0 && screenRows.rest.length === 0 && !screenLoading && <p className="muted">Calculando el screener con las velas de 1h… Si tarda, pulsa "Actualizar screener".</p>}
       </section>
 
       {/* Cartera virtual */}
@@ -1175,7 +1208,7 @@ export default function App() {
             {standings.map((s) => (
               <tr key={s.name} className={s.me ? 'me' : ''}>
                 <td>{s.rank === 1 ? '🥇' : s.rank === 2 ? '🥈' : s.rank === 3 ? '🥉' : s.rank}</td>
-                <td><b>{s.name}</b>{s.demo ? ' <span className="muted">(demo)</span>' : ''}</td>
+                <td><b>{s.name}</b>{s.demo ? <span className="muted"> (demo)</span> : null}</td>
                 <td className={s.ret >= 0 ? 'up' : 'down'}>{s.ret >= 0 ? '+' : ''}{s.ret.toFixed(2)}%</td>
               </tr>
             ))}
@@ -1281,12 +1314,12 @@ export default function App() {
       <section className="card">
         <h2>📊 Panel de mercado PRO</h2>
         <div className="stats">
-          <div><span>Dominio de BTC (CoinGecko)</span><b>{domText}</b></div>
-          <div><span>Capitalización total (CoinGecko)</span><b>{capText}</b></div>
+          <div><span>Dominio de BTC {globalData ? `(${globalData.source}${globalData.approx ? ', aprox.' : ''})` : '(CoinGecko)'}</span><b>{domText}</b></div>
+          <div><span>Capitalización total {globalData ? `(${globalData.source}${globalData.approx ? ', aprox.' : ''})` : '(CoinGecko)'}</span><b>{capText}</b></div>
           <div><span>Miedo y codicia (estimado propio)</span><b style={{ color: fgColor }}>{fearGreed ? `${fearGreed.value} / 100 · ${fearGreed.label}` : '—'}</b></div>
           <div><span>Qué está caliente hoy</span><b className={heat.length && heat[0].change24h >= 0 ? 'up' : 'down'}>{heat.length ? `▲ ${heat[0].symbol} +${heat[0].change24h.toFixed(2)}%` : '—'}</b></div>
         </div>
-        <p className="muted">Capitalización total y dominio de BTC: datos reales de CoinGecko (servidor, /api/global, se refresca cada 5 min). Si CoinGecko está en pausa por límite (429), se muestra "No disponible" en vez de un número inventado. El índice de miedo y codicia es un estimado propio con amplitud, impulso y RSI; NO es el índice oficial de alternative.me.</p>
+        <p className="muted">Capitalización total y dominio de BTC: datos reales del servidor (/api/global, se refresca cada 5 min). Fuente principal CoinGecko; si está en pausa por límite (429), el servidor usa CoinPaprika como respaldo y la cifra va marcada como aproximada. {globalData && globalData.approx ? 'Ahora mismo ves el respaldo (CoinPaprika, aprox.). ' : ''}{!globalData && globalRetrySec != null ? `No disponible ahora mismo: se reintentará solo en ~${globalRetrySec} s. ` : ''}El índice de miedo y codicia es un estimado propio con amplitud, impulso y RSI; NO es el índice oficial de alternative.me.</p>
         {heat.length > 0 && (
           <div className="heatmap" aria-label="Mapa de calor de las 10 criptos">
             {heat.map((m) => {
