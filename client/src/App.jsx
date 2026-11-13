@@ -324,6 +324,12 @@ export default function App() {
   // duplicarse en la lista (en el PDF del 10-nov la misma alerta de
   // $73.53 sonó 4 veces). Persistido en localStorage.
   const alertCooldownRef = useRef(loadLS('cev_alert_cooldown_v1', {}));
+  // v13.1: estas dos refs faltaban en v13 — se usaban en el efecto de
+  // alerta de cambio de veredicto (abajo) pero la refactorización a
+  // pestañas borró su declaración, y el render rompía con
+  // "ReferenceError: prevVerdictKey is not defined" en producción.
+  const prevVerdictKey = useRef(null);
+  const lastSignalAlertRef = useRef(null);
 
   // --- Perfil local (sin login, sin servidor): solo un apodo ---
   const [nickname, setNickname] = useState(() => (loadLS('cev_profile_v1', {}).nickname || ''));

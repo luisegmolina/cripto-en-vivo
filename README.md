@@ -274,6 +274,21 @@ ofrece un apodo local (sin contraseña, sin servidor).
   local" (sin contraseña, sin servidor), que se usa en la liga semanal
   y en la tarjeta para compartir. Nada se envía a ningún servidor.
 
+## Novedades v13.1: arreglo urgente del ReferenceError de v13 (12-nov-2026)
+
+En producción, el bundle v13 (`index-CX6imwh_.js`) rompía el render con
+un error no capturado que Luis copió de su consola:
+`ReferenceError: prevVerdictKey is not defined`. Causa raíz: la
+refactorización a pestañas de v13 borró la declaración de dos refs que
+el efecto de alerta de cambio de veredicto seguía usando
+(`prevVerdictKey` y `lastSignalAlertRef`). Ahora están declaradas con
+`useRef(null)` junto a `alertCooldownRef` en `client/src/App.jsx`. La
+deduplicación de alertas por minuto sigue igual. Lección: el build de
+Vite NO detecta variables sin declarar (no es error de sintaxis), así
+que la nueva prueba `tests-v13.1.mjs` (13/13) revisa el bundle
+compilado buscando los nombres literales, además de simular cambios
+de veredicto en el mismo minuto.
+
 ## Novedades v13: PESTAÑAS — Kalshi al frente, sin ruido (12-nov-2026)
 
 Luis lo dijo claro: la app tenía muchísimo ruido y lo verdaderamente

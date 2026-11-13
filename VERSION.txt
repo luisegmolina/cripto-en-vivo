@@ -1,3 +1,20 @@
+v13.1 — Arreglo urgente del ReferenceError de v13 (12-nov-2026)
+- Error en producción (consola de Luis, bundle index-CX6imwh_.js):
+  "ReferenceError: prevVerdictKey is not defined", no capturado, rompía
+  el render entero. Causa raíz: la refactorización a pestañas de v13
+  borró la declaración de dos refs que el efecto de alerta de cambio de
+  veredicto seguía usando: prevVerdictKey y lastSignalAlertRef. Ahora
+  están declaradas con useRef(null) junto a alertCooldownRef.
+- La deduplicación de alertas por minuto sigue igual: un cambio dispara,
+  un segundo cambio en <60 s reemplaza la alerta anterior, pasado 60 s
+  vuelve a disparar.
+- Nueva prueba tests-v13.1.mjs (13/13): refs declaradas antes de usarse,
+  escaneo de todo client/src buscando X.current sin declarar, el bundle
+  compilado no contiene los nombres literales, y simulación de cambios
+  de veredicto en el mismo minuto.
+- El build de Vite NO detecta este bug (no es error de sintaxis): por
+  eso la prueba revisa el bundle compilado.
+
 v13 — Pestañas: Kalshi al frente (12-nov-2026)
 - Navegación por pestañas: KALSHI (por defecto), Mercados, Gráfico y señal,
   Mi cuenta Kalshi, Cartera virtual, Liga y misiones, Admin (solo admin).
