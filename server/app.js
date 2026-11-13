@@ -458,6 +458,22 @@ app.get('/api/candles', async (req, res) => {
   catch (e) { res.status(502).json({ error: String(e.message || e) }); }
 });
 
+// v13.2: mercado actual KXBTC15M desde la API PÚBLICA de Kalshi (sin
+// clave). Devuelve el precio objetivo contra el que se liquida la
+// ventana y los precios SÍ/NO en centavos. Si Kalshi falla o no trae
+// el mercado, responde source:'coinbase' (HTTP 200, nunca error) y el
+// cliente cae a Coinbase con aviso, nunca en blanco.
+app.get('/api/kalshi-market', async (req, res) => {
+  try {
+    const { getCurrentKalshiMarket } = require('./kalshiServer');
+    const m = await getCurrentKalshiMarket();
+    if (m) return res.json(m);
+    return res.json({ source: 'coinbase', targetPrice: null, reason: 'La API pública de Kalshi no devolvió el mercado actual (KXBTC15M).' });
+  } catch (e) {
+    return res.json({ source: 'coinbase', targetPrice: null, reason: String(e.message || e) });
+  }
+});
+
 // ---- v12: usuarios + Kalshi SOLO LECTURA ----
 // Rutas /api/auth/*, /api/kalshi/*, /api/admin/* y /api/me/*.
 // La BD (Neon si DATABASE_URL, archivo local si no) y el primer admin

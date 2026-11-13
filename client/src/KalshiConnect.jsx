@@ -12,20 +12,29 @@ import { cashOutDecision } from './kalshi.js';
 // Deduce la dirección de una posición real a partir del ticker/título.
 // Mercado "above/up/arriba" = apuesta a que SUBE; "below/down/abajo" = a
 // que BAJA. El lado invierte el sentido: un NO en un mercado de subida
-// es apostar a que BAJA (y viceversa). Si el título no dice hacia dónde
-// va el mercado, no se puede deducir y la posición se muestra sin decisión.
+// es apostar a que BAJA (y viceversa). Se usan \b (límite de palabra)
+// para que "up" no case dentro de "group". Si el título no dice hacia
+// dónde va el mercado, o el lado es desconocido, devuelve null: no se
+// inventa una dirección. El servidor calcula lo mismo (misma lógica) y
+// lo devuelve en pos.direction; esto es el respaldo en el cliente.
+// v13.2: ojo, el lado NO se puede deducir de una posición con cantidad
+// 0: Kalshi solo devuelve el signo de `position` y un 0 no tiene signo,
+// así que ese lado viene de los fills del servidor (sideSource 'fill')
+// o es null. Nunca se muestra un SÍ inventado.
+const UP_PATTERNS = [/\bprice up\b/, /\bgo(es)? up\b/, /\brise(s)?\b/, /\babove\b/, /\bup\b/, /\bpor encima\b/, /\barriba\b/, /\bsube\b/, /\bsubir\b/, /\bal alza\b/];
+const DOWN_PATTERNS = [/\bprice down\b/, /\bgo(es)? down\b/, /\bfall(s)?\b/, /\bbelow\b/, /\bdown\b/, /\bpor debajo\b/, /\babajo\b/, /\bbaja\b/, /\bbajar\b/, /\ba la baja\b/];
 function deriveDir(pos) {
   const text = [pos.ticker, pos.title, pos.marketTitle].filter(Boolean).join(' ').toLowerCase();
-  const upWords = ['above', 'por encima', 'arriba', 'sube', 'up'];
-  const downWords = ['below', 'por debajo', 'abajo', 'baja', 'down'];
-  const hasUp = upWords.some((w) => text.includes(w));
-  const hasDown = downWords.some((w) => text.includes(w));
+  const hasUp = UP_PATTERNS.some((re) => re.test(text));
+  const hasDown = DOWN_PATTERNS.some((re) => re.test(text));
   let marketDir = null;
   if (hasUp && !hasDown) marketDir = 'up';
   else if (hasDown && !hasUp) marketDir = 'down';
   if (!marketDir) return null;
-  if (pos.side === 'no') return marketDir === 'up' ? 'down' : 'up';
-  return marketDir; // side 'yes' (o sin lado): la dirección es la del mercado
+  const s = String(pos.side || '').toLowerCase();
+  if (s === 'yes') return marketDir;
+  if (s === 'no') return marketDir === 'up' ? 'down' : 'up';
+  return null;
 }
 
 function fmtUsd(n) {
@@ -40,7 +49,7 @@ function numOrNull(v) {
   return Number(v);
 }
 
-export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, currentPrice, currency, compact = false, onGoAccount = null }) {
+export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, currentPrice, referencePrice, referenceSource, currency, compact = false, onGoAccount = null }) {
   const [status, setStatus] = useState(null); // {connected, keyIdPreview, lastSyncAt, status}
   const [positionsData, setPositionsData] = useState(null); // {connected, balance, positions, fetchedAt, source}
   const [loading, setLoading] = useState(true);
@@ -134,6 +143,11 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
   const connected = Boolean(status && status.connected);
   const positions = (positionsData && Array.isArray(positionsData.positions)) ? positionsData.positions : [];
   const balance = positionsData && positionsData.balance;
+  // v13.2: cantidad 0 NO es una posición abierta. Se filtra de la
+  // tabla principal y se muestra aparte, sin P&L ni decisión. Solo
+  // cantidad > 0 va en la tabla de abiertas con decisión.
+  const openPositions = positions.filter((p) => (numOrNull(p.count) || 0) > 0);
+  const closedPositions = positions.filter((p) => (numOrNull(p.count) || 0) === 0);
 
   return (
     <div>
@@ -187,16 +201,16 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
               <div><span>Valor de la cartera</span><b>{fmtUsd(balance.portfolioValue)}</b></div>
             </div>
           )}
-          {positions.length === 0 && (
-            <p className="muted">No tienes posiciones abiertas en Kalshi ahora mismo{positionsData && positionsData.fetchedAt ? ` (consultado a las ${new Date(positionsData.fetchedAt).toLocaleTimeString('es-US')})` : ''}.</p>
+          {openPositions.length === 0 && (
+            <p className="muted">No tienes posiciones abiertas en Kalshi ahora mismo{positionsData && positionsData.fetchedAt ? ` (consultado a las ${new Date(positionsData.fetchedAt).toLocaleTimeString('es-US')})` : ''}.{closedPositions.length > 0 ? ` Hay ${closedPositions.length} cerrada(s) abajo.` : ''}</p>
           )}
-          {positions.length > 0 && (
+          {openPositions.length > 0 && (
             <div>
-              <p className="muted">Posiciones reales de Kalshi (precios en centavos, 1–99¢; el contrato paga $1 si aciertas). Precio actual y decisión según la señal 15m de {currency || 'USD'}: <b>{kalshiVerdictKey === 'up' ? '▲ SUBE' : kalshiVerdictKey === 'down' ? '▼ BAJA' : '● ESPERAR'}</b> (puntuación {kalshiScore}).</p>
+              <p className="muted">Posiciones abiertas reales de Kalshi (precios en centavos, 1–99¢; el contrato paga $1 si aciertas). Precio actual y decisión según la señal 15m de {currency || 'USD'}: <b>{kalshiVerdictKey === 'up' ? '▲ SUBE' : kalshiVerdictKey === 'down' ? '▼ BAJA' : '● ESPERAR'}</b> (puntuación {kalshiScore}). Comprueba a ojo cada fila: título del mercado, lado (SÍ/NO) y apuesta (SUBE/BAJA) tienen que coincidir con lo que apostaste en Kalshi.</p>
               <table className="league-table">
                 <thead><tr><th>Mercado</th><th>Lado</th><th>Precio medio</th><th>Cantidad</th><th>Precio actual</th><th>P&amp;L estimado</th><th>¿Cobro o salgo?</th></tr></thead>
                 <tbody>
-                  {positions.map((pos, i) => {
+                  {openPositions.map((pos, i) => {
                     // v13: null es null, no 0. Un precio medio sin dato
                     // se muestra como "—", no como "0¢" (ese era el bug
                     // del video: Number(null) === 0).
@@ -207,24 +221,36 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
                     // currentPrice es el precio del lado que tienes (sí/no), igual que avgPrice.
                     const pnl = (Number.isFinite(avg) && Number.isFinite(cur) && count > 0)
                       ? ((cur - avg) / 100) * count : null;
-                    const dir = deriveDir(pos);
+                    // v13.2: la dirección viene del servidor (o se
+                    // deduce aquí como respaldo). Si es null, NO se
+                    // inventa: se muestra el aviso para verificar.
+                    const dir = pos.direction || deriveDir(pos);
+                    const dirLabel = dir === 'up' ? '▲ SUBE' : dir === 'down' ? '▼ BAJA' : null;
                     const amountUsd = (Number.isFinite(avg) && count > 0) ? (count * avg) / 100 : 0;
                     const decision = dir && Number.isFinite(avg) && Number.isFinite(cur)
                       ? cashOutDecision({ dir, entryPrice: avg, currentPrice: cur, amount: amountUsd, signalKey: kalshiVerdictKey, signalScore: kalshiScore })
                       : null;
+                    const sideLabel = pos.side === 'yes' ? 'SÍ' : pos.side === 'no' ? 'NO' : '—';
                     return (
                       <tr key={`${pos.ticker || ''}-${i}`}>
-                        <td><b>{pos.ticker || '—'}</b><br /><span className="muted">{pos.marketTitle || pos.title || ''}</span>{pos.note && (<><br /><span className="muted">⚠️ {pos.note}</span></>)}{pos.status && (<><br /><span className="muted">Estado del mercado: {pos.status}</span></>)}</td>
-                        <td>{pos.side === 'yes' ? 'SÍ' : pos.side === 'no' ? 'NO' : (pos.side || '—')}</td>
+                        <td><b>{pos.ticker || '—'}</b><br /><span className="muted">{pos.marketTitle || pos.title || ''}</span>{pos.note && (<><br /><span className="muted">⚠️ {pos.note}</span></>)}{pos.status && (<><br /><span className="muted">Estado del mercado: {pos.status}</span></>)}{pos.windowEndsAt && (<><br /><span className="muted">Cierre de ventana: {new Date(pos.windowEndsAt).toLocaleString('es-US')}</span></>)}</td>
+                        <td>{sideLabel}{dirLabel ? (<><br /><b>Apuesta: {dirLabel}</b></>) : (<><br /><span className="muted">Apuesta: —</span></>)}
+                          {pos.sideSource === 'fill' && (<><br /><span className="muted">Lado según tus operaciones</span></>)}
+                          {pos.sideSource === 'unknown' && (<><br /><span className="muted">⚠️ Lado sin verificar: revísalo en Kalshi</span></>)}
+                        </td>
                         <td>{avg != null ? `${avg}¢` : '—'}</td>
                         <td>{count > 0 ? count : '0 (cerrada)'}</td>
                         <td>{cur != null ? `${cur}¢` : '—'}</td>
                         <td className={pnl == null ? '' : pnl >= 0 ? 'up' : 'down'}>{pnl == null ? '—' : `${pnl >= 0 ? '+' : ''}${fmtUsd(pnl)}`}</td>
                         <td>
-                          {decision ? (
+                          {pos.windowClosed ? (
+                            <span className="muted"><b>Ventana cerrada:</b> la ventana de 15 min de este mercado ya cerró; no hay decisión de cobrar o salir. Revisa el resultado en Kalshi.</span>
+                          ) : decision ? (
                             <span><b style={{ color: decision.color }}>{decision.label}</b><br /><span className="muted">{decision.title}</span></span>
+                          ) : dir ? (
+                            <span className="muted">Apuesta a que {dir === 'up' ? 'SUBE' : 'BAJA'}. Sin precio medio o actual no se puede calcular si vas ganando ni decidir cobrar o salir.</span>
                           ) : (
-                            <span className="muted">Sin decisión: no se puede deducir si esta posición es a que SUBE o a que BAJA por el ticker/título.</span>
+                            <span className="muted">⚠️ Sin decisión: no se pudo deducir si esta posición es a que SUBE o a que BAJA por el título o porque el lado no está verificado. Comprueba en Kalshi lo que apostaste.</span>
                           )}
                         </td>
                       </tr>
@@ -232,7 +258,33 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
                   })}
                 </tbody>
               </table>
-              <p className="muted">La decisión usa la señal 15m de la app (no la oficial de Kalshi) y es solo una sugerencia educativa: la app no cobra ni sale por ti. Precio de referencia de {currency || 'USD'} ahora: {currentPrice ? new Intl.NumberFormat('es-US', { style: 'currency', currency: currency || 'USD' }).format(currentPrice) : '—'}.</p>
+              <p className="muted">La decisión usa la señal 15m de la app (no la oficial de Kalshi) y es solo una sugerencia educativa: la app no cobra ni sale por ti. {referenceSource === 'kalshi'
+                ? <>Precio objetivo de Kalshi: <b>{referencePrice ? new Intl.NumberFormat('es-US', { style: 'currency', currency: currency || 'USD' }).format(referencePrice) : '—'}</b> (contra este precio se liquida la ventana).</>
+                : <>Precio de referencia de Coinbase (no de Kalshi): <b>{referencePrice ? new Intl.NumberFormat('es-US', { style: 'currency', currency: currency || 'USD' }).format(referencePrice) : '—'}</b> — la API pública de Kalshi no devolvió el mercado actual.</>} Precio en vivo de Coinbase ahora: {currentPrice ? new Intl.NumberFormat('es-US', { style: 'currency', currency: currency || 'USD' }).format(currentPrice) : '—'}.</p>
+            </div>
+          )}
+          {closedPositions.length > 0 && (
+            <div>
+              <h4>Posiciones cerradas / liquidadas (cantidad 0)</h4>
+              <p className="muted">Kalshi las sigue devolviendo con cantidad 0. No son posiciones abiertas: no hay nada que cobrar ni salir, así que van aquí, sin P&amp;L ni decisión. Comprueba que el lado y la apuesta coinciden con lo que apostaste.</p>
+              <table className="league-table">
+                <thead><tr><th>Mercado</th><th>Lado</th><th>Apuesta</th><th>Detalle</th></tr></thead>
+                <tbody>
+                  {closedPositions.map((pos, i) => {
+                    const dir = pos.direction || deriveDir(pos);
+                    const dirLabel = dir === 'up' ? '▲ SUBE' : dir === 'down' ? '▼ BAJA' : '—';
+                    const sideLabel = pos.side === 'yes' ? 'SÍ' : pos.side === 'no' ? 'NO' : '—';
+                    return (
+                      <tr key={`${pos.ticker || ''}-cerrada-${i}`}>
+                        <td><b>{pos.ticker || '—'}</b><br /><span className="muted">{pos.marketTitle || pos.title || ''}</span></td>
+                        <td>{sideLabel}{pos.sideSource === 'fill' && (<><br /><span className="muted">según tus operaciones</span></>)}{pos.sideSource === 'unknown' && (<><br /><span className="muted">⚠️ sin verificar</span></>)}</td>
+                        <td><b>{dirLabel}</b>{!dir && (<><br /><span className="muted">⚠️ No se pudo deducir: verifica en Kalshi</span></>)}</td>
+                        <td><span className="muted">Cerrada (cantidad 0){pos.windowClosed ? ' · ventana cerrada' : ''}{pos.status ? ` · estado: ${pos.status}` : ''}</span></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </div>

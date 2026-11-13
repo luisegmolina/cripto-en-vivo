@@ -1,3 +1,38 @@
+v13.2 — Lado de Kalshi verificado + precio objetivo de Kalshi (12-nov-2026)
+- Fallo de la captura de Luis (Mi cuenta Kalshi): posición KXBTC15M-26NOV122130-30,
+  "BTC price up in next 15 mins?", Lado SÍ, cantidad 0, cuando él apostó a la BAJA.
+  Causa raíz (verificada contra la documentación de Kalshi): /portfolio/positions
+  NO trae campo `side`; el lado va en el SIGNO de `position`/`position_fp`
+  (>0 = SÍ, <0 = NO, 0 = sin posición neta). El código hacía `count < 0 ? 'no'
+  : 'yes'`, así que una cantidad 0 se mostraba como SÍ inventado. Ahora el lado
+  se resuelve por: campo explícito > signo de position (solo si != 0) > lado
+  del último fill del ticker > null (desconocido, visible, nunca inventado).
+  La dirección se deduce de ticker+título+lado con límites de palabra:
+  "price up"+SÍ=SUBE, "price up"+NO=BAJA, "down"+SÍ=BAJA, "down"+NO=SUBE.
+- Cantidad 0 fuera de la tabla de abiertas: sección aparte "Posiciones cerradas
+  / liquidadas (cantidad 0)", sin P&L ni decisión. Solo cantidad > 0 va en
+  abiertas, con título, lado (SÍ/NO), apuesta (SUBE/BAJA) y decisión
+  COBRA/AGUANTA/SAL. Si la ventana 15m ya cerró, la tabla dice "Ventana
+  cerrada". Si la dirección no se puede deducir o el lado no está verificado,
+  se muestra el aviso para que Luis lo compruebe en Kalshi.
+- CORRECCIÓN: la hora del ticker Kalshi es el CIERRE de la ventana, no el
+  inicio (verificado en vivo: ...2115-15 = 21:00–21:15 ET). parseTickerWindow
+  corregido (inicio = cierre − 15 min).
+- Precio objetivo de Kalshi en la pestaña Kalshi: la referencia de la ventana
+  ya no es el precio de Coinbase, es el PRECIO OBJETIVO del mercado actual
+  KXBTC15M desde la API pública de Kalshi (sin clave), vía GET /api/kalshi-market
+  en el servidor (floor_strike o yes_sub_title "Target Price: $X"). Al lado,
+  el precio SÍ/NO de Kalshi en centavos (precio del contrato, no probabilidad
+  de acierto de la señal). Aviso en la pestaña: la liquidación usa el índice
+  CF Benchmarks BRTI (promedio de 60 segundos, 7 exchanges), no Coinbase.
+  Mercados y Gráfico siguen con Coinbase/Kraken; Kalshi no tiene SOL, XRP,
+  ADA, DOGE, AVAX, LINK, LTC ni DOT. Si la API pública de Kalshi falla, la
+  pestaña cae a Coinbase con el aviso "precio de referencia de Coinbase, no
+  de Kalshi", nunca en blanco.
+- Pruebas tests-v13.2.mjs (58): dirección, lado (signo/fills/desconocido),
+  caso exacto de Luis, ventana del ticker, reparto abiertas/cerradas, precio
+  objetivo de Kalshi (parseo + stub + fallback) y chequeos estáticos.
+
 v13.1 — Arreglo urgente del ReferenceError de v13 (12-nov-2026)
 - Error en producción (consola de Luis, bundle index-CX6imwh_.js):
   "ReferenceError: prevVerdictKey is not defined", no capturado, rompía

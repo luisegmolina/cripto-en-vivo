@@ -159,6 +159,11 @@ export default function App() {
   const [kalshiDir, setKalshiDir] = useState(kalshiPos.dir || 'up');
   const [kalshiAmount, setKalshiAmount] = useState(kalshiPos.amount || '100');
   const [kalshiMsg, setKalshiMsg] = useState('');
+  // v13.2: mercado actual KXBTC15M de la API pública de Kalshi (precio
+  // objetivo + precios SÍ/NO). Solo BTC: Kalshi no tiene mercados de
+  // 15 min para las demás criptos. null = aún no cargado; source
+  // 'coinbase' = Kalshi falló y se cae a Coinbase con aviso.
+  const [kalshiMarket, setKalshiMarket] = useState(null);
   useEffect(() => { saveLS('cev_kalshi_position_v1', { entryPrice: kalshiEntryPrice, dir: kalshiDir, amount: kalshiAmount, entryScore: kalshiPos.entryScore }); }, [kalshiEntryPrice, kalshiDir, kalshiAmount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- v12: USUARIOS + KALSHI SOLO LECTURA (capa encima, no reemplaza nada) ---
@@ -485,7 +490,15 @@ export default function App() {
   }, [mtfVerdict, kalshiVerdict.key]);
   const kalshiProb = estimatedProb(kalshiScore, kalshiAgreement);
   const kalshiRefCandle = candles15m.length ? candles15m[candles15m.length - 1] : null;
-  const kalshiRefPrice = kalshiRefCandle ? kalshiRefCandle.open : null;
+  const kalshiCandleOpen = kalshiRefCandle ? kalshiRefCandle.open : null;
+  // v13.2: el precio de referencia de la ventana es el PRECIO OBJETIVO
+  // de Kalshi (el precio contra el que se liquida), no el de Coinbase.
+  // Si Kalshi no lo devuelve, se cae a la apertura de la vela 15m de
+  // Coinbase (y la UI lo avisa). La señal sigue calculándose con las
+  // velas de Coinbase; la liquidación usa el índice BRTI (ver aviso).
+  const kalshiTargetPrice = kalshiMarket && kalshiMarket.source === 'kalshi' ? kalshiMarket.targetPrice : null;
+  const kalshiRefPrice = kalshiTargetPrice ?? kalshiCandleOpen;
+  const kalshiRefSource = kalshiTargetPrice != null ? 'kalshi' : 'coinbase';
   const kalshiWinChangePct = (kalshiRefPrice && kalshiPrice) ? ((kalshiPrice - kalshiRefPrice) / kalshiRefPrice) * 100 : null;
   const kalshiAtr = useMemo(() => atr(candles15m), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const kalshiBacktest = useMemo(() => backtestSignal(candles15m), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -524,6 +537,24 @@ export default function App() {
   function priceNowForPlan() {
     return ticker?.price ?? markets.find((m) => m.symbol === symbol)?.price ?? null;
   }
+  // v13.2: mercado actual de Kalshi (precio objetivo + SÍ/NO), cada
+  // 30 s. Es el precio contra el que se liquida la ventana. Si Kalshi
+  // falla, el servidor responde source 'coinbase' y la pestaña usa el
+  // precio de Coinbase con aviso, nunca en blanco.
+  useEffect(() => {
+    if (symbol !== 'BTC') { setKalshiMarket(null); return; }
+    let alive = true;
+    const load = async () => {
+      try {
+        const m = await api('/api/kalshi-market');
+        if (alive) setKalshiMarket(m || null);
+      } catch { if (alive) setKalshiMarket({ source: 'coinbase', targetPrice: null }); }
+    };
+    load();
+    const t = setInterval(load, 30000);
+    return () => { alive = false; clearInterval(t); };
+  }, [symbol]);
+
   // v9: capitalización total y dominio de BTC REALES, de /api/global
   // (CoinGecko). Se refrescan cada 5 min. Si CoinGecko falla o da 429,
   // globalData queda en null y la UI muestra "No disponible", nunca un
@@ -1308,11 +1339,20 @@ export default function App() {
           <div className="stats">
             <div><span>Ventana actual</span><b>{fmtClock(kalshiWin.startMs)} – {fmtClock(kalshiWin.endMs)}</b></div>
             <div><span>Cierra en</span><b className="countdown">{fmtCountdown(kalshiWin.remainingMs)}</b></div>
-            <div><span>Precio al inicio de la ventana</span><b>{kalshiRefPrice ? fmt(kalshiRefPrice, currency) : '—'}</b></div>
+            <div><span>Precio objetivo (Kalshi)</span><b>{kalshiTargetPrice ? fmt(kalshiTargetPrice, currency) : '—'}</b></div>
+            <div><span>Precio SÍ / NO (Kalshi)</span><b>{kalshiMarket && kalshiMarket.source === 'kalshi' && kalshiMarket.yesAskCents != null ? `SÍ ${kalshiMarket.yesAskCents}¢ · NO ${kalshiMarket.noAskCents ?? '—'}¢` : '—'}</b></div>
             <div><span>Movimiento en la ventana</span><b className={kalshiWinChangePct != null && kalshiWinChangePct >= 0 ? 'up' : 'down'}>{kalshiWinChangePct != null ? `${kalshiWinChangePct >= 0 ? '+' : ''}${kalshiWinChangePct.toFixed(2)}%` : '—'}</b></div>
           </div>
           <div className="score-bar" aria-hidden="true"><div style={{ width: `${kalshiWin.elapsedPct}%`, background: '#f59e0b' }} /></div>
-          <p className="muted">Ventana {Math.round(kalshiWin.elapsedPct)}% transcurrida. Al cerrar, la predicción se resuelve: ¿el precio terminó por encima o por debajo del precio de referencia?</p>
+          <p className="muted">Ventana {Math.round(kalshiWin.elapsedPct)}% transcurrida. Al cerrar, la predicción se resuelve: ¿el precio terminó por encima o por debajo del precio objetivo de Kalshi?</p>
+          <p className="muted">Precio objetivo de Kalshi: es el precio contra el que se liquida esta ventana (mercado {kalshiMarket && kalshiMarket.ticker ? kalshiMarket.ticker : 'KXBTC15M'}). El precio SÍ/NO es lo que cuesta el contrato en Kalshi en centavos, no la probabilidad de acierto de la señal de esta app.</p>
+          <p className="warn">⚠️ El mercado se liquida con el índice CF Benchmarks BRTI (promedio de 60 segundos, 7 exchanges), no con Coinbase: el precio de Coinbase puede diferir del de liquidación.</p>
+          {kalshiRefSource !== 'kalshi' && (
+            <p className="warn">⚠️ Precio de referencia de Coinbase, no de Kalshi: la API pública de Kalshi no devolvió el mercado actual, así que la referencia es la apertura de la vela 15m de Coinbase.</p>
+          )}
+          {kalshiCandleOpen && kalshiTargetPrice && (
+            <p className="muted">Apertura de la ventana según Coinbase: {fmt(kalshiCandleOpen, currency)} (solo orientativo; la liquidación usa el objetivo de Kalshi).</p>
+          )}
 
           <div className="verdict-main">
             <div className="verdict-word">{kalshiVerdict.icon} {kalshiVerdict.label}</div>
@@ -1365,7 +1405,7 @@ export default function App() {
           {/* v12/v13: KALSHI REAL SOLO LECTURA — posiciones de verdad, nunca opera.
               Aquí, versión compacta: solo las posiciones. Conectar se hace en Mi cuenta. */}
           {user ? (
-            <KalshiConnect compact token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} currentPrice={kalshiPrice} currency={currency} onGoAccount={() => setActiveTab('cuenta')} />
+            <KalshiConnect compact token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} currentPrice={kalshiPrice} referencePrice={kalshiRefPrice} referenceSource={kalshiRefSource} currency={currency} onGoAccount={() => setActiveTab('cuenta')} />
           ) : (
             <p className="muted">🔐 Para conectar tu Kalshi, entra o crea tu cuenta (solo lectura: la app nunca opera por ti).</p>
           )}
@@ -1650,7 +1690,7 @@ export default function App() {
         ) : (
           <div>
             <p className="muted">Sesión: <b>{user.name || user.email}</b> ({user.email}){user.role === 'admin' ? ' · administrador' : ''}</p>
-            <KalshiConnect token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} currentPrice={kalshiPrice} currency={currency} />
+            <KalshiConnect token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} currentPrice={kalshiPrice} referencePrice={kalshiRefPrice} referenceSource={kalshiRefSource} currency={currency} />
             <div className="row"><button onClick={handleLogout}>Salir de mi cuenta</button></div>
           </div>
         )}
