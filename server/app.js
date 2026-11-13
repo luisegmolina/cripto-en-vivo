@@ -458,7 +458,14 @@ app.get('/api/candles', async (req, res) => {
   catch (e) { res.status(502).json({ error: String(e.message || e) }); }
 });
 
-// ---- En producción (Vercel), los archivos estáticos los sirve Vercel ----
+// ---- v12: usuarios + Kalshi SOLO LECTURA ----
+// Rutas /api/auth/*, /api/kalshi/*, /api/admin/* y /api/me/*.
+// La BD (Neon si DATABASE_URL, archivo local si no) y el primer admin
+// (ADMIN_EMAIL/ADMIN_PASSWORD) se preparan en segundo plano: si la BD
+// no está disponible, la app pública sigue funcionando igual.
+const authRoutes = require('./routes');
+app.use('/api', authRoutes.router);
+authRoutes.init().catch((e) => console.log('[auth] ⚠️ La BD de usuarios no arrancó (la app pública sigue igual):', e.message));
 // desde client/dist (outputDirectory). Solo en local (no Vercel) el
 // servidor Express sirve client/dist, para que `npm start` funcione.
 if (!process.env.VERCEL) {
