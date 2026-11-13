@@ -1,5 +1,5 @@
-Cripto en Vivo — VERSIÓN v10
-Fecha: 2026-11-11
+Cripto en Vivo — VERSIÓN v12
+Fecha: 2026-11-12
 - v4 en la interfaz: "Cartera virtual + gráfico en vivo".
 - v5: configuración de despliegue (vercel.json, api/, render.yaml).
 - v6: guía RENDER.md con los pasos exactos para desplegar gratis en
@@ -80,3 +80,26 @@ Fecha: 2026-11-11
   7 de 12, 58% medido el 12-nov) y últimas 5 ventanas con acierto/
   fallo. Sin API real de Kalshi, sin cuenta, sin dinero real.
   Pruebas tests-v11.mjs: 34/34 con datos reales del servidor local.
+
+- v12 (2026-11-12): USUARIOS + KALSHI SOLO LECTURA. Registro con email
+  + contraseña (bcrypt) y login JWT (7 días); sin registro obligatorio
+  para ver precios y señales. Panel de administración en /admin (solo
+  rol admin; Luis es el primer admin, creado con ADMIN_EMAIL y
+  ADMIN_PASSWORD en Render): lista de usuarios, quién conectó Kalshi
+  (solo sí/no y última sync), activar/desactivar, resetear contraseña.
+  Nunca muestra contraseñas ni claves privadas. Conectar Kalshi por
+  usuario (SOLO LECTURA): Key ID + clave privada .pem, cifrada con
+  AES-256-GCM (KALSHI_ENCRYPTION_KEY en Render); el servidor solo hace
+  GET a /portfolio/positions, /portfolio/balance y /portfolio/fills;
+  NO existe código de escritura a Kalshi. Conectado, se ven las
+  posiciones reales (ticker, lado sí/no, precio medio ¢, cantidad,
+  precio actual ¢, P&L estimado) y la decisión COBRA/AGUANTA/SAL del
+  modo 15 min aplicada a la posición real. Base de datos Neon Postgres
+  (tablas cev_users, cev_kalshi_connections, cev_user_data; el servidor
+  las crea solas con DATABASE_URL); sin DATABASE_URL, archivo JSON
+  local solo para probar (en Render se perdería al reiniciar).
+  Variables en Render: DATABASE_URL, JWT_SECRET,
+  KALSHI_ENCRYPTION_KEY, ADMIN_EMAIL, ADMIN_PASSWORD (quitarla tras
+  crear el admin). PENDIENTE de Luis: crear la base en Neon y poner
+  las variables en Render (pasos exactos en DEPLOYMENT.md).
+  Pruebas tests-v12.mjs: 37/37 con datos reales del servidor local.

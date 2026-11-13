@@ -274,6 +274,65 @@ ofrece un apodo local (sin contraseña, sin servidor).
   local" (sin contraseña, sin servidor), que se usa en la liga semanal
   y en la tarjeta para compartir. Nada se envía a ningún servidor.
 
+## Novedades v12: Usuarios + Kalshi SOLO LECTURA (12-nov-2026)
+
+La app pública sigue igual y sin registro obligatorio para ver precios
+y señales. Los usuarios son una capa encima, para guardar las cosas
+en la cuenta y para conectar Kalshi.
+
+### 1. Usuarios (registro, login, JWT)
+- **Registro** con email + contraseña (mínimo 8 caracteres, hash
+  bcrypt, nunca en claro) y nombre/apodo. **Login** con JWT (7 días),
+  sesión que persiste, **Salir**. Sin sesión, todo sigue local como
+  en v11.
+- ¿Olvidaste tu contraseña? No hay correo automático: pídele al admin
+  que la resetee desde el panel de administración.
+- Al entrar con cuenta, tu cartera virtual y tus alertas se guardan
+  en tu cuenta (si el servidor ya tenía datos, se usan esos; si no,
+  se suben los locales). Sin cuenta, siguen en este navegador.
+
+### 2. Panel de administración (`/admin`, solo rol admin)
+- Luis es el primer admin (se crea con las variables de entorno
+  `ADMIN_EMAIL` y `ADMIN_PASSWORD` en Render, ver DEPLOYMENT.md).
+- El admin ve: lista de usuarios, quién conectó Kalshi (solo sí/no
+  y última sincronización), quién está activo, y puede
+  desactivar/reactivar un usuario y resetearle la contraseña.
+- El admin **NUNCA** ve contraseñas ni claves privadas de Kalshi de
+  nadie: las respuestas del servidor no las incluyen jamás.
+
+### 3. Conectar Kalshi por usuario (SOLO LECTURA)
+- En el Modo Kalshi 15 min, con sesión, hay un panel "Conectar
+  Kalshi (solo lectura)": pegas tu Kalshi API Key ID y tu clave
+  privada (.pem, texto o archivo). El servidor la **cifra con
+  AES-256-GCM** (clave maestra `KALSHI_ENCRYPTION_KEY` en Render) y
+  la guarda cifrada. El frontend nunca la recibe de vuelta: solo se
+  muestra `keyIdPreview` (4 primeros + 4 últimos caracteres).
+- El servidor usa tu clave **solo para firmar peticiones GET** a
+  Kalshi: `/trade-api/v2/portfolio/positions`,
+  `/portfolio/balance` y `/portfolio/fills`. **Nunca** llama a
+  crear/cancelar órdenes ni a ningún endpoint de escritura: no
+  existe ese código en el servidor (tests-v12 lo comprueba).
+- Conectado, ves tus **posiciones reales de Kalshi** (ticker, lado
+  sí/no, precio medio en ¢, cantidad, precio actual en ¢, P&L
+  estimado) y la decisión de cobrar/salir del modo 15 min aplicada
+  a TU posición real, no a una virtual. Sin conectar, sigue el modo
+  virtual de v11 sin cambios.
+
+### 4. Base de datos (Neon Postgres)
+- Tablas `cev_users`, `cev_kalshi_connections` y `cev_user_data`
+  (ver `server/schema.sql`; el servidor las crea solas al arrancar
+  si `DATABASE_URL` está puesta). Base separada para cripto-en-vivo:
+  NO se tocan las tablas de Mercado Cuba.
+- **Sin `DATABASE_URL` (dev local)**, el servidor usa un archivo
+  JSON local (`server/data/db.json`, ignorado por git). En Render
+  ese archivo se perdería al reiniciar (disco efímero): en
+  producción `DATABASE_URL` es obligatoria.
+- Variables de entorno en Render (solo los nombres; los valores los
+  pone Luis en el panel de Render, nunca en GitHub ni en el chat):
+  `DATABASE_URL`, `JWT_SECRET`, `KALSHI_ENCRYPTION_KEY`,
+  `ADMIN_EMAIL`, `ADMIN_PASSWORD` (solo para crear el primer admin;
+  quítala después de entrar).
+
 ## Qué es real y qué es demo/local
 
 | Función | Estado |
@@ -290,6 +349,9 @@ ofrece un apodo local (sin contraseña, sin servidor).
 | Screener | REAL (cálculo sobre datos reales), prueba educativa |
 | Modo Kalshi 15 min: ventana, cuenta atrás, señal SUBE/BAJA, ¿cobro o salgo? | REAL (cálculo local sobre velas reales de 15m), pero prueba educativa: sin cuenta de Kalshi, sin API de Kalshi, sin dinero real; la probabilidad es estimada propia, NO oficial de Kalshi |
 | Posición virtual Kalshi (entrada, dirección, cantidad) | LOCAL (localStorage, dinero virtual) |
+| Usuarios: registro/login, cartera y alertas en la cuenta | REAL (Neon Postgres con DATABASE_URL; en local, archivo JSON) |
+| Conectar Kalshi por usuario | REAL (solo lectura: posiciones/saldo/fills con tu clave cifrada AES-256-GCM; nunca opera por ti) |
+| Panel de administración (/admin) | REAL (solo rol admin; nunca muestra contraseñas ni claves privadas) |
 
 ## Novedades v6 y anteriores
 

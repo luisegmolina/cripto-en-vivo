@@ -125,3 +125,69 @@ gratis (suficiente para una instancia siempre encendida en teoría,
 pero con el sueño por inactividad). No se necesita tarjeta para el
 plan free. El dominio propio se puede añadir después, sin coste en
 Render (el dominio en sí se compra aparte, ~$10-15/año un .com).
+
+## v12 — Usuarios + Kalshi SOLO LECTURA (12-nov-2026)
+
+### Qué se construyó
+- Registro/login con email + contraseña (bcrypt) y JWT (7 días).
+- Panel de administración en `/admin` (solo rol admin).
+- Conexión a Kalshi por usuario, SOLO LECTURA (posiciones, saldo,
+  operaciones), con la clave privada cifrada AES-256-GCM.
+- Tablas `cev_users`, `cev_kalshi_connections`, `cev_user_data`
+  (ver `server/schema.sql`).
+
+### Paso pendiente de Luis: Neon + variables de entorno en Render
+El código está listo, pero la base de datos de producción NO está
+creada desde aquí (no hay acceso a la consola de Neon desde este
+entorno y la cadena de Mercado Cuba no se toca). Pasos exactos:
+
+1. **Neon (neon.tech, con su cuenta):** crea un proyecto nuevo
+   llamado `cripto-en-vivo` (o, si prefiere, una base de datos nueva
+   dentro del proyecto que ya usa para Mercado Cuba, separada de sus
+   tablas). Copia su **cadena de conexión** (Connection Details).
+   **No la pegues en el chat**: va directa al panel de Render.
+2. **Render → servicio `cripto-en-vivo` → Environment:** añade
+   estas variables (solo los nombres; los valores, en el panel):
+   - `DATABASE_URL` = la cadena de conexión de Neon del paso 1.
+   - `JWT_SECRET` = una cadena larga al azar (mínimo 32 caracteres;
+     se puede generar con `openssl rand -hex 32` en su laptop).
+   - `KALSHI_ENCRYPTION_KEY` = 64 caracteres hex al azar
+     (`openssl rand -hex 32` en su laptop). Cifra las claves
+     privadas de Kalshi de los usuarios.
+   - `ADMIN_EMAIL` = su email (ej. el que usa en GitHub).
+   - `ADMIN_PASSWORD` = una contraseña fuerte para el primer admin.
+3. **Redespliega** (Manual Deploy → Deploy latest commit, o espera
+   al redespliegue automático). Al arrancar, el servidor crea las
+   tablas `cev_*` solo y crea el admin con `ADMIN_EMAIL` /
+   `ADMIN_PASSWORD` (si aún no hay ningún admin).
+4. Entra en https://cripto-en-vivo.onrender.com con ese email y esa
+   contraseña, ve a **🛡️ Admin** y cambia tu contraseña. Después,
+   **quita `ADMIN_PASSWORD` de las variables de entorno de Render**
+   y redespliega una vez más (así la contraseña del admin no queda
+   guardada en Render).
+5. Sin `DATABASE_URL`, la app pública sigue funcionando igual
+   (precios, señales, modo Kalshi virtual), pero los usuarios se
+   guardan en un archivo local efímero: NO se debe usar así en
+   producción. Con `DATABASE_URL` puesta, todo vive en Neon.
+
+### Qué NO se puede hacer desde aquí (honestidad)
+- Crear la base de Neon ni poner las variables en Render: hace
+  falta la consola de Neon y el panel de Render de Luis.
+- Probar con una cuenta real de Kalshi: no hay credenciales reales;
+  la conexión se probó con una clave de prueba generada para el
+  test (Kalshi la rechazó con 400, como debe ser, y no se guardó
+  nada). La firma Ed25519 y RSA-PSS se verificaron con las claves
+  públicas correspondientes.
+- Probar los clics del frontend en un navegador real: el build pasa
+  y la lógica se probó en Node con datos reales, pero la interacción
+  (registro, panel admin, conectar Kalshi) debe confirmarla Luis en
+  su navegador.
+
+### Pruebas v12 (tests-v12.mjs, 37/37 con datos reales del servidor local)
+Registro/login/JWT, email duplicado, contraseña corta, login con
+clave mala, admin 403 para usuario normal, admin lista usuarios sin
+`password_hash`, desactivar/reactivar, reset de contraseña, Kalshi
+sin conectar, clave .pem inválida, clave de prueba rechazada por
+Kalshi, cifrado AES-256-GCM (el blob no contiene el pem en claro),
+firma Ed25519 y RSA-PSS verificadas, allowlist de solo 3 rutas
+GET de Kalshi, y que no hay POST/PUT/DELETE a Kalshi en el servidor.

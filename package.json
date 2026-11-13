@@ -1,5 +1,5 @@
 {
-  "description": "Cripto en Vivo \u2014 React + Node. El servidor trae los precios; el frontend solo habla con localhost.",
+  "description": "Cripto en Vivo — React + Node. El servidor trae los precios; el frontend solo habla con localhost.",
   "devDependencies": {
     "concurrently": "^9.0.1"
   },
@@ -14,7 +14,10 @@
   },
   "version": "1.0.0",
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.23.1"
   }
 }
