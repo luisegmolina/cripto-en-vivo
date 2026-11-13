@@ -4,7 +4,8 @@ import { analyze, emaSeries, bollingerSeries, rsiSeries } from './analysis.js';
 import { updateLastCandle, candlesSignature, mergeServerCandles } from './liveCandle.js';
 import { fearGreedEstimate, heatToday, isoWeekKey, rivalsForWeek } from './marketPro.js';
 import { backtestSignal } from './backtest.js';
-import { multiTfVerdict, reasonsFor, tradePlan, signalHistory, VERDICT_TFS } from './verdict.js';
+import { multiTfVerdict, reasonsFor, tradePlan, signalHistory, atr, VERDICT_TFS } from './verdict.js';
+import { KALSHI_WINDOW_MS, window15m, fmtClock, fmtCountdown, kalshiVerdictForScore, strengthForScore, estimatedProb, cashOutDecision, suggestedExitPrice } from './kalshi.js';
 import { MISSIONS, levelForXp, xpIntoLevel, XP_PER_LEVEL } from './missions.js';
 import { screenOpportunities } from './screener.js';
 import { shouldFireAlert, ALERT_COOLDOWN_MS, dedupePriceAlerts } from './alerts.js';
@@ -20,7 +21,7 @@ const ASSETS = [
 const INTERVALS = ['1m', '5m', '15m', '1h', '6h', '1d'];
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v10 — Liga sin código roto, screener automático, alertas sin duplicados, 1h en todo, respaldo CoinPaprika';
+const VERSION_LABEL = 'v11 — Modo Kalshi 15 min: ventana, cuenta atrás, señal SUBE/BAJA y ¿cobro o salgo?';
 
 const ACHIEVEMENTS = [
   { id: 'primera_operacion', name: 'Primera operación virtual', desc: 'Compra o vende por primera vez con dinero virtual.' },
@@ -123,6 +124,28 @@ export default function App() {
   // El aviso "1m es ruido" solo sale si el usuario cambia a 1m a mano.
   const [candleInterval, setCandleInterval] = useState('1h');
   useEffect(() => { setCandleInterval('1h'); }, []);
+
+  // --- v11: MODO KALSHI 15 MIN (capa encima, no reemplaza nada) ---
+  // Kalshi = predicciones por ventanas de 15 minutos: en ese tiempo
+  // hay que decidir si cobrar lo ganado o salir. Sin conexión a la
+  // cuenta de Kalshi, sin dinero real, sin probabilidades oficiales:
+  // todo virtual y educativo, solo en este navegador.
+  const [kalshiMode, setKalshiMode] = useState(() => loadLS('cev_kalshi_mode_v1', false));
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  useEffect(() => { saveLS('cev_kalshi_mode_v1', kalshiMode); }, [kalshiMode]);
+  // Al activar el modo, el timeframe principal pasa a 15m; al
+  // apagarlo, vuelve a 1h (el intervalo para decidir en general).
+  useEffect(() => { setCandleInterval(kalshiMode ? '15m' : '1h'); }, [kalshiMode]);
+  const [kalshiPos, setKalshiPos] = useState(() => loadLS('cev_kalshi_position_v1', { entryPrice: '', dir: 'up', amount: '100', entryScore: null }));
+  const [kalshiEntryPrice, setKalshiEntryPrice] = useState(kalshiPos.entryPrice || '');
+  const [kalshiDir, setKalshiDir] = useState(kalshiPos.dir || 'up');
+  const [kalshiAmount, setKalshiAmount] = useState(kalshiPos.amount || '100');
+  const [kalshiMsg, setKalshiMsg] = useState('');
+  useEffect(() => { saveLS('cev_kalshi_position_v1', { entryPrice: kalshiEntryPrice, dir: kalshiDir, amount: kalshiAmount, entryScore: kalshiPos.entryScore }); }, [kalshiEntryPrice, kalshiDir, kalshiAmount]); // eslint-disable-line react-hooks/exhaustive-deps
   const [markets, setMarkets] = useState([]);
   const [ticker, setTicker] = useState(null);
   const [candles, setCandles] = useState([]);
@@ -312,6 +335,61 @@ export default function App() {
   const last1hKey = candles1h.length ? `${candles1h.length}:${candles1h[candles1h.length - 1].time}` : 'empty';
   const backtest = useMemo(() => backtestSignal(candles1h), [last1hKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const histSignals = useMemo(() => signalHistory(candles1h, 10), [last1hKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- v11: cálculos del MODO KALSHI 15 MIN ---
+  // (kalshiPrice se define aquí porque priceNow se declara más abajo;
+  // usar priceNow aquí daría error de zona temporal muerta.)
+  const kalshiPrice = ticker?.price ?? markets.find((m) => m.symbol === symbol)?.price ?? null;
+  const kalshiWin = window15m(nowMs);
+  const candles15m = (mtfCandles['15m'] && mtfCandles['15m'].length >= 32)
+    ? mtfCandles['15m']
+    : (candleInterval === '15m' ? candles : []);
+  const last15mKey = candles15m.length ? `${candles15m.length}:${candles15m[candles15m.length - 1].time}` : 'empty';
+  const analysis15m = useMemo(() => (mtfAnalysis['15m'] || (candles15m.length >= 30 ? analyze(candles15m) : null)), [mtfAnalysis, last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const kalshiScore = analysis15m ? analysis15m.score : 0;
+  const kalshiVerdict = kalshiVerdictForScore(kalshiScore);
+  const kalshiReasons = useMemo(() => reasonsFor(analysis15m), [analysis15m]);
+  const kalshiAgreement = useMemo(() => {
+    if (!mtfVerdict || !mtfVerdict.rows) return 0;
+    const clear = mtfVerdict.rows.filter((r) => r.key === 'buy' || r.key === 'sell');
+    if (!clear.length) return 0;
+    const want = kalshiVerdict.key === 'up' ? 'buy' : kalshiVerdict.key === 'down' ? 'sell' : null;
+    if (!want) return 0;
+    return clear.filter((r) => r.key === want).length / clear.length;
+  }, [mtfVerdict, kalshiVerdict.key]);
+  const kalshiProb = estimatedProb(kalshiScore, kalshiAgreement);
+  const kalshiRefCandle = candles15m.length ? candles15m[candles15m.length - 1] : null;
+  const kalshiRefPrice = kalshiRefCandle ? kalshiRefCandle.open : null;
+  const kalshiWinChangePct = (kalshiRefPrice && kalshiPrice) ? ((kalshiPrice - kalshiRefPrice) / kalshiRefPrice) * 100 : null;
+  const kalshiAtr = useMemo(() => atr(candles15m), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const kalshiBacktest = useMemo(() => backtestSignal(candles15m), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const kalshiHist = useMemo(() => signalHistory(candles15m, 5), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const kalshiEntryNum = Number(kalshiEntryPrice);
+  const kalshiAmountNum = Number(kalshiAmount);
+  const kalshiDecision = useMemo(() => cashOutDecision({
+    dir: kalshiDir, entryPrice: kalshiEntryNum, currentPrice: kalshiPrice, amount: kalshiAmountNum,
+    signalKey: kalshiVerdict.key, signalScore: kalshiScore, entryScore: kalshiPos.entryScore,
+  }), [kalshiDir, kalshiEntryNum, kalshiPrice, kalshiAmountNum, kalshiVerdict.key, kalshiScore, kalshiPos.entryScore]);
+  const kalshiExitPrice = suggestedExitPrice({
+    decisionKey: kalshiDecision.key, currentPrice: kalshiPrice, entryPrice: kalshiEntryNum, dir: kalshiDir, atr15m: kalshiAtr,
+  });
+  const setKalshiPosition = () => {
+    if (!kalshiEntryNum || kalshiEntryNum <= 0 || !kalshiAmountNum || kalshiAmountNum <= 0) {
+      setKalshiMsg('Pon un precio de entrada y una cantidad virtual mayores que 0.');
+      return;
+    }
+    // Guardar la puntuación de la señal al entrar: así la app sabe si
+    // la señal se debilitó o se dio la vuelta desde que entraste.
+    setKalshiPos({ entryPrice: kalshiEntryPrice, dir: kalshiDir, amount: kalshiAmount, entryScore: kalshiScore });
+    saveLS('cev_kalshi_position_v1', { entryPrice: kalshiEntryPrice, dir: kalshiDir, amount: kalshiAmount, entryScore: kalshiScore });
+    setKalshiMsg(`Posición virtual guardada: apostaste a que ${kalshiDir === 'up' ? 'SUBE' : 'BAJA'} desde ${fmt(kalshiEntryNum, currency)} con ${fmt(kalshiAmountNum, currency)} virtuales. La app te dirá si cobrar o salir.`);
+  };
+  const clearKalshiPosition = () => {
+    setKalshiPos({ entryPrice: '', dir: 'up', amount: '100', entryScore: null });
+    setKalshiEntryPrice(''); setKalshiDir('up'); setKalshiAmount('100');
+    saveLS('cev_kalshi_position_v1', { entryPrice: '', dir: 'up', amount: '100', entryScore: null });
+    setKalshiMsg('Posición virtual borrada.');
+  };
   function priceNowForPlan() {
     return ticker?.price ?? markets.find((m) => m.symbol === symbol)?.price ?? null;
   }
@@ -948,6 +1026,93 @@ export default function App() {
           })}
         </div>
       </section>
+
+      {/* v11: MODO KALSHI 15 MIN — interruptor visible, capa encima del resto */}
+      <div className="row kalshi-toggle-row">
+        <button className={kalshiMode ? 'on' : ''} onClick={() => setKalshiMode((v) => !v)}>
+          {kalshiMode ? '⏱️ Modo Kalshi 15 min: ACTIVADO' : '⏱️ Activar Modo Kalshi 15 min'}
+        </button>
+        <span className="muted">Predicciones por ventanas de 15 minutos: SUBE o BAJA en la ventana, y ¿cobro o salgo? Dinero virtual, educativo, sin cuenta de Kalshi.</span>
+      </div>
+
+      {kalshiMode && (
+        <section className={`card verdict-card kalshi-card verdict-${kalshiVerdict.key === 'up' ? 'buy' : kalshiVerdict.key === 'down' ? 'sell' : 'wait'}`} aria-label="Modo Kalshi 15 minutos">
+          <p className="verdict-kicker">MODO KALSHI 15 MIN · {symbol} · VENTANA DE 15 MINUTOS · EDUCATIVO, NO ES RECOMENDACIÓN DE APUESTA</p>
+          <div className="stats">
+            <div><span>Ventana actual</span><b>{fmtClock(kalshiWin.startMs)} – {fmtClock(kalshiWin.endMs)}</b></div>
+            <div><span>Cierra en</span><b className="countdown">{fmtCountdown(kalshiWin.remainingMs)}</b></div>
+            <div><span>Precio al inicio de la ventana</span><b>{kalshiRefPrice ? fmt(kalshiRefPrice, currency) : '—'}</b></div>
+            <div><span>Movimiento en la ventana</span><b className={kalshiWinChangePct != null && kalshiWinChangePct >= 0 ? 'up' : 'down'}>{kalshiWinChangePct != null ? `${kalshiWinChangePct >= 0 ? '+' : ''}${kalshiWinChangePct.toFixed(2)}%` : '—'}</b></div>
+          </div>
+          <div className="score-bar" aria-hidden="true"><div style={{ width: `${kalshiWin.elapsedPct}%`, background: '#f59e0b' }} /></div>
+          <p className="muted">Ventana {Math.round(kalshiWin.elapsedPct)}% transcurrida. Al cerrar, la predicción se resuelve: ¿el precio terminó por encima o por debajo del precio de referencia?</p>
+
+          <div className="verdict-main">
+            <div className="verdict-word">{kalshiVerdict.icon} {kalshiVerdict.label}</div>
+            <div className="verdict-meta">
+              <span>Puntuación 15m: <b>{kalshiScore}</b> / −100 a +100</span>
+              <span>Fuerza: <b>{strengthForScore(kalshiScore)}</b></span>
+              <span>Confianza (confluencia): <b>{kalshiProb}% estimado*</b></span>
+            </div>
+          </div>
+          <p className="muted">* Probabilidad ESTIMADA propia a partir de la señal (puntuación + timeframes que coinciden). NO es la probabilidad oficial de Kalshi. Una señal que acertó ~56% en 1h puede fallar en 15 minutos.</p>
+          {kalshiReasons.length > 0 && (
+            <ul className="reasons">
+              {kalshiReasons.map((r, i) => (
+                <li key={i} className={`reason-${r.dir}`}><b>{r.icon}</b> {r.text}</li>
+              ))}
+            </ul>
+          )}
+          {kalshiBacktest.total > 0 && (
+            <p className="muted">En 15m, la señal acertó <b>{kalshiBacktest.wins} de {kalshiBacktest.total} ({kalshiBacktest.pct}%)</b> en las ventanas pasadas. El pasado no predice la próxima ventana.</p>
+          )}
+
+          <h3>¿Cobro o me quedo?</h3>
+          <div className="row">
+            <label>Precio de entrada ({CUR[currency]}): <input type="number" min="0" step="1" value={kalshiEntryPrice} placeholder={kalshiPrice ? String(Math.round(kalshiPrice)) : ''} onChange={(e) => setKalshiEntryPrice(e.target.value)} /></label>
+            <label>Dirección: <select value={kalshiDir} onChange={(e) => setKalshiDir(e.target.value)}>
+              <option value="up">Aposté a que SUBE</option>
+              <option value="down">Aposté a que BAJA</option>
+            </select></label>
+            <label>Cantidad virtual ({CUR[currency]}): <input type="number" min="1" step="10" value={kalshiAmount} onChange={(e) => setKalshiAmount(e.target.value)} /></label>
+            <button onClick={setKalshiPosition}>Guardar mi posición virtual</button>
+            <button onClick={clearKalshiPosition}>Borrar posición</button>
+          </div>
+          {kalshiMsg && <p className="muted">{kalshiMsg}</p>}
+          <div className="signal" style={{ borderColor: kalshiDecision.color }}>
+            <b style={{ color: kalshiDecision.color, fontSize: 26 }}>{kalshiDecision.label}</b>
+            <span><b>{kalshiDecision.title}</b></span>
+            <span>{kalshiDecision.text}</span>
+            {kalshiDecision.pnl != null && (
+              <span>Tu posición virtual: <b className={kalshiDecision.pnl >= 0 ? 'up' : 'down'}>{kalshiDecision.pnl >= 0 ? '+' : ''}{fmt(kalshiDecision.pnl, currency)} ({kalshiDecision.pnlPct >= 0 ? '+' : ''}{kalshiDecision.pnlPct.toFixed(2)}%)</b> · precio ahora {kalshiPrice ? fmt(kalshiPrice, currency) : '—'} · entrada {fmt(kalshiEntryNum, currency)}</span>
+            )}
+            {kalshiExitPrice && (
+              <span>Precio sugerido para cobrar/salir: <b>{fmt(kalshiExitPrice, currency)}</b> {kalshiDecision.key === 'hold' || kalshiDecision.key === 'hold-careful' ? `(objetivo a 1 ATR 15m, ${kalshiAtr ? fmt(kalshiAtr, currency) : '—'})` : '(precio actual)'}</span>
+            )}
+          </div>
+          <p className="muted">Regla simple: si vas ganando y la señal se dio la vuelta, cobra. Si vas perdiendo y la señal va en tu contra, sal. Si la señal sigue a tu favor, aguanta hasta el cierre de la ventana. Todo virtual: nada de esto mueve dinero real ni tu cuenta de Kalshi.</p>
+
+          {kalshiHist.length > 0 && (
+            <div>
+              <h3>Últimas ventanas de 15 min — {symbol}</h3>
+              <table className="league-table">
+                <thead><tr><th>Ventana</th><th>Señal</th><th>Precio</th><th>Después</th><th>Resultado</th></tr></thead>
+                <tbody>
+                  {kalshiHist.map((h, i) => (
+                    <tr key={i}>
+                      <td>{new Date(h.time * 1000).toLocaleTimeString('es-US', { hour: '2-digit', minute: '2-digit' })}</td>
+                      <td className={h.key === 'buy' ? 'up' : 'down'}><b>{h.key === 'buy' ? '▲ SUBE' : '▼ BAJA'}</b> ({h.score})</td>
+                      <td>{fmt(h.price, currency)}</td>
+                      <td className={h.changePct >= 0 ? 'up' : 'down'}>{h.changePct >= 0 ? '+' : ''}{h.changePct.toFixed(2)}%</td>
+                      <td><b>{h.won ? '✅ Acertó' : '❌ Falló'}</b></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
 
       {/* v8: VEREDICTO — lo primero que ve el usuario: ¿compro o vendo? */}
       <section className={`card verdict-card verdict-${mtfVerdict.verdict.key} ${mtfVerdict.conflict ? 'verdict-conflict' : ''}`} aria-label="Veredicto de trading">
