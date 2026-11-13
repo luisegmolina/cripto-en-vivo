@@ -169,7 +169,10 @@ async function getTicker(asset, cur) {
   throw err;
 }
 
-// ---- Markets: primaria Kraken batch (1 sola llamada para los 10) ----
+// ---- Markets: primaria Coinbase en paralelo (v13.4), respaldo Kraken batch ----
+// v13.4: la vía primaria de markets es Coinbase en paralelo, la MISMA
+// fuente que el ticker (/api/ticker), para que el cambio 24h del
+// mismo activo sea el mismo en el grid de Mercados y en el ticker.
 // Kraken acepta varios pares en una sola petición Ticker y no tiene el
 // límite bajo de CoinGecko gratis (5-15 llamadas/min). Por eso CoinGecko
 // YA NO es la vía primaria de markets: solo queda como ÚLTIMO recurso.
@@ -349,21 +352,29 @@ app.get('/api/markets', async (req, res) => {
   const hit = getCache(key, 15000); // caché 15 s: el cliente sondea cada 10 s, así la mayoría de polls salen de caché y no queman APIs
   if (hit) return res.json(hit);
   try {
-    // 1) Primaria: una sola llamada batch a Kraken para los 10 activos.
+    // v13.4 — UNA SOLA FUENTE para el cambio 24h: Coinbase. Antes la
+    // primaria era el batch de Kraken y el ticker venía de Coinbase,
+    // así que el MISMO activo mostraba dos cambios 24h distintos
+    // (medido 12-nov-2026: BTC −4,84% en el ticker de Coinbase con
+    // apertura $73.709, frente a −1,70% en el grid de Kraken con
+    // apertura $71.370). Ahora markets y ticker usan la misma
+    // función (tickerCoinbase), así que el número coincide. Kraken
+    // batch queda como respaldo para los huecos que Coinbase no dé.
+    // 1) Primaria: los 10 tickers de Coinbase en paralelo.
     let items = ASSETS.map(() => null);
     try {
-      const batch = await marketsKrakenBatch(cur);
-      markSuccess('Kraken');
-      items = batch;
-    } catch (e) { logSourceFail('Kraken (batch)', `markets ${cur}`, e); }
-    // 2) Huecos: los 10 tickers de Coinbase en paralelo.
+      const cb = await marketsCoinbaseParallel(cur);
+      markSuccess('Coinbase');
+      items = cb;
+    } catch (e) { logSourceFail('Coinbase', `markets ${cur}`, e); }
+    // 2) Huecos: una sola llamada batch a Kraken para los 10 activos.
     let missing = ASSETS.filter((a, i) => !items[i]);
     if (missing.length) {
       try {
-        const cb = await marketsCoinbaseParallel(cur);
-        markSuccess('Coinbase');
-        items = ASSETS.map((a, i) => items[i] || cb[i]);
-      } catch (e) { logSourceFail('Coinbase', `markets ${cur}`, e); }
+        const batch = await marketsKrakenBatch(cur);
+        markSuccess('Kraken');
+        items = ASSETS.map((a, i) => items[i] || batch[i]);
+      } catch (e) { logSourceFail('Kraken (batch)', `markets ${cur}`, e); }
     }
     // 3) ÚLTIMO recurso: batch de CoinGecko (límite gratis bajo; si da
     // 429 entra en pausa de 60 s y se salta, no se reintenta en bucle).

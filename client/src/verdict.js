@@ -135,7 +135,11 @@ export function tradePlan(price, candles, verdictKey) {
 
 // Historial de señales derivado de las velas: en cada ventana se
 // calcula la señal y se mira si la vela siguiente fue en la dirección
-// sugerida. Devuelve las últimas N señales con su resultado.
+// sugerida. Es la medida correcta para la señal GENERAL (1h, pestaña
+// Gráfico). NO es la medida de Kalshi: para las ventanas 15m de
+// Kalshi se usa windowOutcome.js, que compara el cierre de la MISMA
+// ventana con su apertura (lo que liquida Kalshi). No mezclarlas.
+// Devuelve las últimas N señales con su resultado.
 export function signalHistory(candles, maxItems = 10) {
   if (!candles || candles.length < 32) return [];
   const out = [];

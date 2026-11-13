@@ -386,7 +386,26 @@ async function getPositions({ keyId, privateKeyPem }) {
     positions.push(posOut);
   }
   const balance = balJson ? { balance: balJson.balance != null ? Number(balJson.balance) / 100 : null, portfolioValue: balJson.portfolio_value != null ? Number(balJson.portfolio_value) / 100 : null } : null;
-  return { positions, balance, fetchedAt: new Date().toISOString() };
+  // v13.4 — Historial de apuestas reales: se devuelven los fills
+  // (operaciones) normalizados, los 50 más recientes, para que la UI
+  // muestre el historial con resultado. Campos de Kalshi (2026):
+  // price_dollars (texto en $) o price (centavos), count_fp (texto)
+  // o count, side 'yes'/'no', action 'buy'/'sell', created_time.
+  // Si Kalshi no devuelve fills, la lista viene vacía y la UI lo
+  // dice, sin inventar operaciones.
+  const fillsOut = fills
+    .map((f) => ({
+      ticker: f.ticker || null,
+      side: String(f.side || '').toLowerCase() === 'yes' ? 'yes' : String(f.side || '').toLowerCase() === 'no' ? 'no' : null,
+      action: String(f.action || '').toLowerCase() || null,
+      priceCents: f.price_dollars != null ? Math.round(Number(f.price_dollars) * 100) : (Number.isFinite(Number(f.price)) ? Number(f.price) : null),
+      count: Number(f.count_fp ?? f.count ?? f.quantity ?? 0) || 0,
+      createdAt: f.created_time || null,
+    }))
+    .filter((f) => f.ticker)
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+    .slice(0, 50);
+  return { positions, balance, fills: fillsOut, fetchedAt: new Date().toISOString() };
 }
 
 // Prueba las credenciales con una llamada de solo lectura.

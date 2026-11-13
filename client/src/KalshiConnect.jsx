@@ -14,7 +14,7 @@
 // en App.jsx, alrededor de este componente.
 import React, { useEffect, useRef, useState } from 'react';
 import { apiAuth } from './auth.js';
-import { cashOutDecision } from './kalshi.js';
+import { cashOutDecisionReal } from './kalshi.js';
 
 // Deduce la dirección de una posición real a partir del ticker/título.
 // Mercado "above/up/arriba" = apuesta a que SUBE; "below/down/abajo" = a
@@ -56,7 +56,7 @@ function numOrNull(v) {
   return Number(v);
 }
 
-export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, currentPrice, referencePrice, referenceSource, currency, user = null, onLogout = null }) {
+export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, currentPrice, referencePrice, referenceSource, currency, user = null, onLogout = null, active = true, onRealDecision = null }) {
   const [status, setStatus] = useState(null); // {connected, keyIdPreview, lastSyncAt, status}
   const [positionsData, setPositionsData] = useState(null); // {connected, balance, positions, fetchedAt, source}
   const [loading, setLoading] = useState(true);
@@ -66,11 +66,14 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
   const [fileName, setFileName] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  const [nowTick, setNowTick] = useState(Date.now());
   const fileRef = useRef(null);
+  const onRealDecisionRef = useRef(onRealDecision);
+  onRealDecisionRef.current = onRealDecision;
 
-  async function load() {
-    setLoading(true);
-    setError('');
+  // v13.4: refresco silencioso (sin el "Comprobando…" ni spinner):
+  // lo usa el auto-refresco cada 30 s y el botón manual.
+  async function loadPositionsQuiet() {
     try {
       const [s, p] = await Promise.all([
         apiAuth('/api/kalshi/status'),
@@ -78,14 +81,40 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
       ]);
       setStatus(s);
       setPositionsData(p);
+      setError('');
+      return true;
     } catch (e) {
       setError(e.message || 'No se pudo cargar el estado de Kalshi.');
-    } finally {
-      setLoading(false);
+      return false;
     }
   }
 
+  async function load() {
+    setLoading(true);
+    setError('');
+    await loadPositionsQuiet();
+    setLoading(false);
+  }
+
   useEffect(() => { load(); }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // v13.4: auto-refresco de posiciones reales cada 30 s, solo mientras
+  // la pestaña Kalshi está activa y hay conexión. En 15 min, una
+  // posición sin refrescar es una decisión con precio viejo. El
+  // servidor cachea /api/kalshi/positions 30 s, así que el ritmo
+  // coincide con /api/kalshi-market y no quema la API de Kalshi.
+  // Además un reloj cada 15 s para avisar si la última sincronización
+  // tiene más de 2 min (p. ej. si Kalshi dejó de responder).
+  useEffect(() => {
+    if (!active) return undefined;
+    const tick = setInterval(() => setNowTick(Date.now()), 15000);
+    return () => clearInterval(tick);
+  }, [active]);
+  useEffect(() => {
+    if (!active || !status || !status.connected) return undefined;
+    const id = setInterval(() => { loadPositionsQuiet(); }, 30000);
+    return () => clearInterval(id);
+  }, [active, status && status.connected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function onPemFile(e) {
     const f = e.target.files && e.target.files[0];
@@ -155,6 +184,49 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
   // cantidad > 0 va en la tabla de abiertas con decisión.
   const openPositions = positions.filter((p) => (numOrNull(p.count) || 0) > 0);
   const closedPositions = positions.filter((p) => (numOrNull(p.count) || 0) === 0);
+  // v13.4: fills (operaciones reales) que devuelve el servidor en
+  // positionsData.fills; si no hay, lista vacía y la UI lo dice.
+  const fills = (positionsData && Array.isArray(positionsData.fills)) ? positionsData.fills : [];
+
+  // v13.4: decisión REAL por precio del contrato (cashOutDecisionReal):
+  // ≥85¢ cobra, ≤15¢ sal (salvo señal muy a favor con mucho tiempo),
+  // entre 15 y 85 manda la señal 15m. La virtual sigue con precio USD
+  // y cashOutDecision, sin tocarla. El P&L de la decisión es el real
+  // en $ ((actual − medio) × cantidad / 100).
+  function realDecisionFor(pos) {
+    const avg = numOrNull(pos.avgPrice);
+    const cur = numOrNull(pos.currentPrice);
+    const count = numOrNull(pos.count) || 0;
+    const dir = pos.direction || deriveDir(pos);
+    if (!dir || !Number.isFinite(avg) || !Number.isFinite(cur) || count <= 0) return null;
+    const remainingMs = pos.windowEndsAt ? (new Date(pos.windowEndsAt).getTime() - Date.now()) : null;
+    return cashOutDecisionReal({
+      dir, entryPriceCents: avg, currentPriceCents: cur, count,
+      signalKey: kalshiVerdictKey, signalScore: kalshiScore,
+      windowRemainingMs: remainingMs,
+    });
+  }
+  const openDecisions = openPositions.map((pos) => {
+    const decision = realDecisionFor(pos);
+    const dir = pos.direction || deriveDir(pos);
+    return decision ? { ticker: pos.ticker, side: pos.side, dir, count: numOrNull(pos.count) || 0, currentPriceCents: numOrNull(pos.currentPrice), decision } : null;
+  }).filter(Boolean);
+
+  // v13.4: la decisión real sube al padre (App.jsx) para el banner
+  // justo debajo del veredicto, antes del formulario virtual. Solo
+  // se avisa cuando cambia (misma firma), para no re-renderizar en
+  // bucle con cada tick del precio.
+  const openDecisionsSig = JSON.stringify(openDecisions.map((d) => [d.ticker, d.decision.key, d.decision.priceRule, d.currentPriceCents]));
+  useEffect(() => {
+    if (onRealDecisionRef.current) onRealDecisionRef.current(openDecisions);
+  }, [openDecisionsSig]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // v13.4: aviso si la última sincronización tiene más de 2 min.
+  // nowTick (reloj de 15 s) es lo que hace que el aviso aparezca sin
+  // recargar la página.
+  const lastSyncMs = positionsData && positionsData.fetchedAt ? new Date(positionsData.fetchedAt).getTime() : (status && status.lastSyncAt ? new Date(status.lastSyncAt).getTime() : null);
+  const syncAgeMs = lastSyncMs ? (nowTick - lastSyncMs) : null;
+  const syncStale = connected && syncAgeMs != null && syncAgeMs > 2 * 60 * 1000;
 
   // v13.3: el formulario de conexión es el mismo en los dos casos: a la
   // vista si no hay conexión, y colapsado (<details>) si ya la hay, para
@@ -193,12 +265,19 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
 
       {connected && (
         <div>
+          {syncStale && (
+            <p className="warn">⚠️ Última sincronización hace más de 2 minutos ({Math.round(syncAgeMs / 60000)} min): Kalshi no está devolviendo posiciones frescas. Los precios y la decisión pueden estar viejos — pulsa el botón de actualizar de «Mi cuenta» o comprueba en Kalshi.</p>
+          )}
+          {!syncStale && positionsData && positionsData.fetchedAt && (
+            <p className="muted">Posiciones actualizadas a las {new Date(positionsData.fetchedAt).toLocaleTimeString('es-US')} (se refrescan solas cada 30 s mientras esta pestaña está abierta).</p>
+          )}
           {openPositions.length === 0 && (
             <p className="muted">No tienes posiciones abiertas en Kalshi ahora mismo{positionsData && positionsData.fetchedAt ? ` (consultado a las ${new Date(positionsData.fetchedAt).toLocaleTimeString('es-US')})` : ''}.{closedPositions.length > 0 ? ` Hay ${closedPositions.length} cerrada(s) abajo.` : ''}</p>
           )}
           {openPositions.length > 0 && (
             <div>
               <p className="muted">Posiciones abiertas reales de Kalshi (precios en centavos, 1–99¢; el contrato paga $1 si aciertas). Precio actual y decisión según la señal 15m de {currency || 'USD'}: <b>{kalshiVerdictKey === 'up' ? '▲ SUBE' : kalshiVerdictKey === 'down' ? '▼ BAJA' : '● ESPERAR'}</b> (puntuación {kalshiScore}). Comprueba a ojo cada fila: título del mercado, lado (SÍ/NO) y apuesta (SUBE/BAJA) tienen que coincidir con lo que apostaste en Kalshi.</p>
+              <p className="muted">Regla de la decisión por precio del contrato: si tu lado vale <b>≥85¢ → COBRA AHORA</b> (casi ganado); si vale <b>≤15¢ → SAL ANTES DE PERDER MÁS</b> (casi perdido, salvo señal muy a tu favor con más de la mitad de la ventana por delante); entre 15¢ y 85¢ manda la señal 15m.</p>
               <table className="league-table">
                 <thead><tr><th>Mercado</th><th>Lado</th><th>Precio medio</th><th>Cantidad</th><th>Precio actual</th><th>P&amp;L estimado</th><th>¿Cobro o salgo?</th></tr></thead>
                 <tbody>
@@ -218,10 +297,11 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
                     // inventa: se muestra el aviso para verificar.
                     const dir = pos.direction || deriveDir(pos);
                     const dirLabel = dir === 'up' ? '▲ SUBE' : dir === 'down' ? '▼ BAJA' : null;
-                    const amountUsd = (Number.isFinite(avg) && count > 0) ? (count * avg) / 100 : 0;
-                    const decision = dir && Number.isFinite(avg) && Number.isFinite(cur)
-                      ? cashOutDecision({ dir, entryPrice: avg, currentPrice: cur, amount: amountUsd, signalKey: kalshiVerdictKey, signalScore: kalshiScore })
-                      : null;
+                    // v13.4: decisión REAL por precio del contrato
+                    // (cashOutDecisionReal), no la de la virtual.
+                    // El P&L de la decisión es el real en $; el de la
+                    // tabla (pnl) se calculaba igual y se mantiene.
+                    const decision = realDecisionFor(pos);
                     const sideLabel = pos.side === 'yes' ? 'SÍ' : pos.side === 'no' ? 'NO' : '—';
                     return (
                       <tr key={`${pos.ticker || ''}-${i}`}>
@@ -238,7 +318,7 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
                           {pos.windowClosed ? (
                             <span className="muted"><b>Ventana cerrada:</b> la ventana de 15 min de este mercado ya cerró; no hay decisión de cobrar o salir. Revisa el resultado en Kalshi.</span>
                           ) : decision ? (
-                            <span><b style={{ color: decision.color }}>{decision.label}</b><br /><span className="muted">{decision.title}</span></span>
+                            <span><b style={{ color: decision.color }}>{decision.label}</b><br /><span className="muted">{decision.title}</span>{decision.reason === 'contract-price' && (<><br /><span className="muted">Por precio del contrato ({cur}¢), no solo por la señal.</span></>)}</span>
                           ) : dir ? (
                             <span className="muted">Apuesta a que {dir === 'up' ? 'SUBE' : 'BAJA'}. Sin precio medio o actual no se puede calcular si vas ganando ni decidir cobrar o salir.</span>
                           ) : (
@@ -279,6 +359,63 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
               </table>
             </div>
           )}
+          {/* v13.4 §3b — Historial de mis apuestas (reales, solo lectura).
+              Posiciones cerradas con su P&L realizado cuando Kalshi lo
+              devuelve (realizedPnl), y las operaciones (fills). Si no
+              hay dato para decidir el resultado, se dice, no se inventa. */}
+          <div>
+            <h4>📜 Historial de mis apuestas</h4>
+            {closedPositions.length === 0 && fills.length === 0 && (
+              <p className="muted">Sin historial: Kalshi no devolvió posiciones cerradas ni operaciones (fills) para tu cuenta. Si apostaste y ya se liquidó, revisa en Kalshi; la app solo muestra lo que la API devuelve.</p>
+            )}
+            {closedPositions.length > 0 && (
+              <div>
+                <p className="muted">Apuestas cerradas / liquidadas. El resultado sale del P&amp;L realizado que devuelve Kalshi (realizedPnl); si Kalshi no lo devuelve, se dice «sin dato», no se inventa un ganó/perdió.</p>
+                <table className="league-table">
+                  <thead><tr><th>Mercado</th><th>Lado</th><th>Apuesta</th><th>Resultado</th><th>P&amp;L realizado</th></tr></thead>
+                  <tbody>
+                    {closedPositions.map((pos, i) => {
+                      const dir = pos.direction || deriveDir(pos);
+                      const dirLabel = dir === 'up' ? '▲ SUBE' : dir === 'down' ? '▼ BAJA' : '—';
+                      const sideLabel = pos.side === 'yes' ? 'SÍ' : pos.side === 'no' ? 'NO' : '—';
+                      const rp = numOrNull(pos.realizedPnl);
+                      const outcome = rp == null ? null : rp > 0 ? 'ganó' : rp < 0 ? 'perdió' : 'empató';
+                      return (
+                        <tr key={`${pos.ticker || ''}-hist-${i}`}>
+                          <td><b>{pos.ticker || '—'}</b><br /><span className="muted">{pos.marketTitle || pos.title || ''}</span></td>
+                          <td>{sideLabel}</td>
+                          <td><b>{dirLabel}</b></td>
+                          <td>{outcome ? (<b className={rp > 0 ? 'up' : rp < 0 ? 'down' : ''}>{outcome === 'ganó' ? '✅ Ganó' : outcome === 'perdió' ? '❌ Perdió' : '➖ Empató'}</b>) : (<span className="muted">Sin dato: Kalshi no devolvió el P&amp;L realizado de esta apuesta.</span>)}</td>
+                          <td className={rp == null ? '' : rp >= 0 ? 'up' : 'down'}>{rp == null ? '—' : `${rp >= 0 ? '+' : ''}${fmtUsd(rp)}`}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {fills.length > 0 && (
+              <div>
+                <p className="muted">Operaciones (fills) más recientes de tu cuenta, tal como las devuelve Kalshi. Una compra no es una apuesta cerrada por sí sola: es la operación con la que entraste o saliste.</p>
+                <table className="league-table">
+                  <thead><tr><th>Fecha</th><th>Mercado</th><th>Lado</th><th>Acción</th><th>Precio</th><th>Cantidad</th></tr></thead>
+                  <tbody>
+                    {fills.slice(0, 20).map((f, i) => (
+                      <tr key={`fill-${i}`}>
+                        <td>{f.createdAt ? new Date(f.createdAt).toLocaleString('es-US') : '—'}</td>
+                        <td><b>{f.ticker || '—'}</b></td>
+                        <td>{f.side === 'yes' ? 'SÍ' : f.side === 'no' ? 'NO' : '—'}</td>
+                        <td>{f.action === 'buy' ? 'Compró' : f.action === 'sell' ? 'Vendió' : (f.action || '—')}</td>
+                        <td>{f.priceCents != null ? `${f.priceCents}¢` : '—'}</td>
+                        <td>{f.count || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {fills.length > 20 && (<p className="muted">Mostrando las 20 más recientes de {fills.length}.</p>)}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

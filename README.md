@@ -81,7 +81,10 @@ ganando o salir. La v11 añade una capa encima de todo lo anterior
    estimada a partir de la señal (puntuación + confluencia). **NO es
    la probabilidad oficial de Kalshi** y va etiquetada como tal en
    la app. No hay integración con la API real de Kalshi, no hay
-   cuenta de Kalshi conectada, no hay dinero real.
+   cuenta de Kalshi conectada, no hay dinero real. (Esto era así en
+   v11: desde v12 sí hay conexión solo lectura a la cuenta de Kalshi
+   y desde v13.2 precios oficiales del contrato en centavos; ver
+   "Novedades v12" y "Novedades v13.4".)
 6. **Últimas ventanas de 15 min:** tabla con las últimas 5 ventanas
    y si la señal acertó o falló en cada una.
 > ⚠️ Prueba educativa con dinero VIRTUAL. Nada de esto es una
@@ -273,6 +276,22 @@ ofrece un apodo local (sin contraseña, sin servidor).
 - Sin login al entrar. Solo un campo de **apodo local** en "Tu perfil
   local" (sin contraseña, sin servidor), que se usa en la liga semanal
   y en la tarjeta para compartir. Nada se envía a ningún servidor.
+
+## Novedades v13.4: Medición Kalshi real + decisión por precio del contrato (13-nov-2026)
+
+Auditoría del 12-nov-2026 (21:04 Chicago) encontró un fallo metodológico: "Últimas ventanas" y el backtest 15m medían el acierto contra la vela SIGUIENTE, pero Kalshi liquida cada ventana contra su precio objetivo. Además la decisión de cobrar ignoraba el precio del contrato en centavos, y el mismo BTC mostraba dos cambios 24h distintos (ticker vs grid de Mercados). Todo corregido:
+
+1. **Medición 15m como liquida Kalshi** (`client/src/windowOutcome.js`): cada ventana se mide por su propio cierre contra su apertura. Medido en vivo con velas reales: la medida vieja daba 4/10 (40%) y la nueva 7/10 (70%); 8 de 13 ventanas claras discrepan. La señal general 1h sigue con la medida de vela siguiente (correcta para ella).
+2. **Etiqueta honesta:** "Últimas ventanas con señal clara — 15 min" (no son las últimas 5 seguidas: la señal es rara). Tabla con Apertura y Cierre.
+3. **SEÑAL DÉBIL:** si la señal acierta menos del 50% en las últimas ventanas con señal clara, el veredicto muestra "⚠️ SEÑAL DÉBIL" junto a SUBE/BAJA/ESPERAR, además de bajar la confianza a 60%.
+4. **Decisión REAL por precio del contrato** (`cashOutDecisionReal`): ≥85¢ → COBRA AHORA; ≤15¢ → SAL (salvo señal muy a favor con más de la mitad de la ventana por delante); entre 15¢ y 85¢ manda la señal. P&L real en $. La posición VIRTUAL no cambia.
+5. **Cambio 24h unificado:** `/api/markets` ahora usa Coinbase como primaria, la misma fuente que el ticker; Kraken queda de respaldo. Verificado: ticker −5,07% y Mercados −5,07%.
+6. **Historial de mis apuestas (§3b):** cerradas con resultado desde el P&L realizado de Kalshi (si no lo devuelve, dice "sin dato") y fills recientes.
+7. **Auto-refresco** de posiciones reales cada 30 s con la pestaña Kalshi activa, con aviso si la última sincronización tiene más de 2 min.
+8. **Decisión real al frente:** banner COBRA/AGUANTA/SAL de la posición abierta justo debajo del veredicto, antes del formulario virtual.
+9. Comentario de cabecera de `kalshi.js` actualizado (ya no dice que no hay conexión a Kalshi).
+
+Nada de v7–v13.3 se quitó. Pruebas: `tests-v13.4.mjs` (56).
 
 ## Novedades v13.3: Kalshi en UNA sola pestaña (12-nov-2026)
 

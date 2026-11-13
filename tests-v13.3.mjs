@@ -31,14 +31,14 @@ console.log('— una sola instancia completa —');
 ok('un solo <KalshiConnect en App.jsx', count(appSrc, '<KalshiConnect') === 1);
 ok('sin la variante compacta', !appSrc.includes('<KalshiConnect compact'));
 ok('KalshiConnect recibe user y onLogout', appSrc.includes('user={user}') && appSrc.includes('onLogout={handleLogout}'));
-ok('la instancia vive en la pestaña Kalshi', appSrc.indexOf("{activeTab === 'kalshi' && (") < appSrc.indexOf('<KalshiConnect') && appSrc.indexOf('<KalshiConnect') < appSrc.indexOf('Últimas ventanas de 15 min'));
+ok('la instancia vive en la pestaña Kalshi', appSrc.indexOf("{activeTab === 'kalshi' && (") < appSrc.indexOf('<KalshiConnect') && appSrc.indexOf('<KalshiConnect') < appSrc.indexOf('Últimas ventanas con señal clara'));
 
 // 3. Las 5 secciones en orden dentro de la pestaña Kalshi.
 console.log('— 5 secciones en orden —');
 const iPred = appSrc.indexOf('MODO KALSHI 15 MIN');
 const iCobro = appSrc.indexOf('¿Cobro o me quedo?');
 const iPos = appSrc.indexOf('<KalshiConnect');
-const iHist = appSrc.indexOf('Últimas ventanas de 15 min');
+const iHist = appSrc.indexOf('Últimas ventanas con señal clara');
 ok('§1 predicción, §2 cobro, §3+§4 KalshiConnect, §5 últimas ventanas', iPred > 0 && iPred < iCobro && iCobro < iPos && iPos < iHist);
 const kPos = kcSrc.indexOf('Mis posiciones de Kalshi');
 const kCerradas = kcSrc.indexOf('Posiciones cerradas / liquidadas');
@@ -74,7 +74,7 @@ ok('sin segundo aviso BRTI en KalshiConnect', !kcSrc.includes('BRTI'));
 
 // 6. Versión.
 console.log('— versión —');
-ok('VERSION.txt empieza por v13.3', versionTxt.startsWith('v13.3'));
-ok('VERSION_LABEL v13.3 en App.jsx', appSrc.includes("VERSION_LABEL = 'v13.3"));
+ok('VERSION.txt empieza por v13.4', versionTxt.startsWith('v13.4'));
+ok('VERSION_LABEL v13.4 en App.jsx', appSrc.includes("VERSION_LABEL = 'v13.4"));
 
 console.log(`\ntests-v13.3: ${pass} pasaron`);

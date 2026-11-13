@@ -4,6 +4,7 @@ import { analyze, emaSeries, bollingerSeries, rsiSeries } from './analysis.js';
 import { updateLastCandle, candlesSignature, mergeServerCandles } from './liveCandle.js';
 import { fearGreedEstimate, heatToday, isoWeekKey, rivalsForWeek } from './marketPro.js';
 import { backtestSignal } from './backtest.js';
+import { evaluateWindowSignal, backtestWindowSignal } from './windowOutcome.js';
 import { multiTfVerdict, reasonsFor, tradePlan, signalHistory, atr, VERDICT_TFS } from './verdict.js';
 import { KALSHI_WINDOW_MS, window15m, fmtClock, fmtCountdown, kalshiVerdictForScore, strengthForScore, estimatedProb, adjustProbForRecent, recentWinRate, cashOutDecision, suggestedExitPrice } from './kalshi.js';
 import { MISSIONS, levelForXp, xpIntoLevel, XP_PER_LEVEL } from './missions.js';
@@ -24,7 +25,7 @@ const ASSETS = [
 const INTERVALS = ['1m', '5m', '15m', '1h', '6h', '1d'];
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v13.3 — Kalshi en una sola pestaña';
+const VERSION_LABEL = 'v13.4 — Medición Kalshi real + decisión por precio del contrato';
 
 const ACHIEVEMENTS = [
   { id: 'primera_operacion', name: 'Primera operación virtual', desc: 'Compra o vende por primera vez con dinero virtual.' },
@@ -160,6 +161,17 @@ export default function App() {
   const [kalshiDir, setKalshiDir] = useState(kalshiPos.dir || 'up');
   const [kalshiAmount, setKalshiAmount] = useState(kalshiPos.amount || '100');
   const [kalshiMsg, setKalshiMsg] = useState('');
+  // v13.4: decisiones de las posiciones REALES abiertas, que sube
+  // KalshiConnect (onRealDecision) para el banner debajo del
+  // veredicto. Se actualiza solo si cambia (comparación por JSON en
+  // el setter) para no re-renderizar en bucle con cada tick.
+  const [realDecisions, setRealDecisions] = useState([]);
+  const handleRealDecisions = (list) => {
+    setRealDecisions((prev) => {
+      const next = Array.isArray(list) ? list : [];
+      return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+    });
+  };
   // v13.2: mercado actual KXBTC15M de la API pública de Kalshi (precio
   // objetivo + precios SÍ/NO). Solo BTC: Kalshi no tiene mercados de
   // 15 min para las demás criptos. null = aún no cargado; source
@@ -502,12 +514,18 @@ export default function App() {
   const kalshiRefSource = kalshiTargetPrice != null ? 'kalshi' : 'coinbase';
   const kalshiWinChangePct = (kalshiRefPrice && kalshiPrice) ? ((kalshiPrice - kalshiRefPrice) / kalshiRefPrice) * 100 : null;
   const kalshiAtr = useMemo(() => atr(candles15m), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const kalshiBacktest = useMemo(() => backtestSignal(candles15m), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const kalshiHist = useMemo(() => signalHistory(candles15m, 5), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // v13.4: la medida 15m es la de KALSHI (windowOutcome.js): cierre
+  // de la MISMA ventana vs su apertura (lo que liquida Kalshi), NO
+  // la vela siguiente. backtestSignal/signalHistory siguen para la
+  // señal general 1h, que sí se mide contra la vela siguiente.
+  const kalshiBacktest = useMemo(() => backtestWindowSignal(candles15m), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const kalshiHist = useMemo(() => evaluateWindowSignal(candles15m, 5), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // v13: si en las últimas ventanas la señal 15m acierta menos del
   // 50%, no se esconde: se avisa en la pestaña Kalshi y la confianza
-  // estimada se baja (tope 60%).
+  // estimada se baja (tope 60%). v13.4: además el veredicto muestra
+  // "SEÑAL DÉBIL" junto a SUBE/BAJA/ESPERAR, no solo baja la confianza.
   const kalshiRecent = recentWinRate(kalshiHist);
+  const kalshiWeakSignal = Boolean(kalshiRecent && kalshiRecent.rate < 0.5);
   const kalshiProbAdj = adjustProbForRecent(kalshiProb, kalshiHist);
   const kalshiEntryNum = Number(kalshiEntryPrice);
   const kalshiAmountNum = Number(kalshiAmount);
@@ -1357,7 +1375,7 @@ export default function App() {
           )}
 
           <div className="verdict-main">
-            <div className="verdict-word">{kalshiVerdict.icon} {kalshiVerdict.label}</div>
+            <div className="verdict-word">{kalshiVerdict.icon} {kalshiVerdict.label}{kalshiWeakSignal && (<span> · ⚠️ SEÑAL DÉBIL</span>)}</div>
             <div className="verdict-meta">
               <span>Puntuación 15m: <b>{kalshiScore}</b> / −100 a +100</span>
               <span>Fuerza: <b>{strengthForScore(kalshiScore)}</b></span>
@@ -1365,8 +1383,8 @@ export default function App() {
             </div>
           </div>
           <p className="muted">* Probabilidad ESTIMADA propia a partir de la señal (puntuación + timeframes que coinciden). NO es la probabilidad oficial de Kalshi. Una señal que acertó ~56% en 1h puede fallar en 15 minutos.</p>
-          {kalshiRecent && kalshiRecent.rate < 0.5 && (
-            <p className="warn">⚠️ Últimas {kalshiRecent.total} ventanas de 15 min: la señal solo acertó {kalshiRecent.wins} ({Math.round(kalshiRecent.rate * 100)}%). Está fallando últimamente: la confianza se bajó a {kalshiProbAdj}% y no conviene apostar fuerte por ella.</p>
+          {kalshiWeakSignal && (
+            <p className="warn">⚠️ SEÑAL DÉBIL — Últimas {kalshiRecent.total} ventanas con señal clara de 15 min: la señal solo acertó {kalshiRecent.wins} ({Math.round(kalshiRecent.rate * 100)}%). Está fallando últimamente: la confianza se bajó a {kalshiProbAdj}% y no conviene apostar fuerte por ella. Medido como liquida Kalshi: cierre de cada ventana contra su apertura, no contra la vela siguiente.</p>
           )}
           {kalshiReasons.length > 0 && (
             <ul className="reasons">
@@ -1376,7 +1394,23 @@ export default function App() {
             </ul>
           )}
           {kalshiBacktest.total > 0 && (
-            <p className="muted">En 15m, la señal acertó <b>{kalshiBacktest.wins} de {kalshiBacktest.total} ({kalshiBacktest.pct}%)</b> en las ventanas pasadas. El pasado no predice la próxima ventana.</p>
+            <p className="muted">En 15m, la señal acertó <b>{kalshiBacktest.wins} de {kalshiBacktest.total} ({kalshiBacktest.pct}%)</b> en las ventanas pasadas, medido como liquida Kalshi (cierre de cada ventana contra su apertura). El pasado no predice la próxima ventana.</p>
+          )}
+
+          {/* v13.4: decisión de tu posición REAL abierta, al frente:
+              justo debajo del veredicto y antes del formulario virtual.
+              La tabla de abajo (§3) la repite con el detalle; aquí va
+              el resumen para decidir en segundos. */}
+          {realDecisions.length > 0 && (
+            <div className="signal" style={{ borderColor: realDecisions[0].decision.color }}>
+              <b style={{ color: realDecisions[0].decision.color, fontSize: 26 }}>{realDecisions[0].decision.label}</b>
+              <span><b>Tu posición real en Kalshi: {realDecisions[0].ticker} — {realDecisions[0].side === 'yes' ? 'SÍ' : realDecisions[0].side === 'no' ? 'NO' : '—'} ({realDecisions[0].count} contrato(s), {realDecisions[0].currentPriceCents}¢ ahora)</b></span>
+              <span>{realDecisions[0].decision.title}</span>
+              {realDecisions.length > 1 && (
+                <span>Otras abiertas: {realDecisions.slice(1).map((d) => `${d.ticker}: ${d.decision.label} (${d.currentPriceCents}¢)`).join(' · ')}</span>
+              )}
+              <span className="muted">Solo lectura: la app no cobra ni sale por ti — decide y opera tú en Kalshi. Detalle en §3 Mis posiciones.</span>
+            </div>
           )}
 
           <h3>¿Cobro o me quedo?</h3>
@@ -1410,7 +1444,7 @@ export default function App() {
               La posición virtual de arriba (§2) y la real de la tabla
               usan la misma regla de ¿cobro o salgo? */}
           {user ? (
-            <KalshiConnect token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} currentPrice={kalshiPrice} referencePrice={kalshiRefPrice} referenceSource={kalshiRefSource} currency={currency} user={user} onLogout={handleLogout} />
+            <KalshiConnect token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} currentPrice={kalshiPrice} referencePrice={kalshiRefPrice} referenceSource={kalshiRefSource} currency={currency} user={user} onLogout={handleLogout} active={activeTab === 'kalshi'} onRealDecision={handleRealDecisions} />
           ) : (
             <div>
               <h3>📡 Mis posiciones de Kalshi — solo lectura</h3>
@@ -1436,14 +1470,16 @@ export default function App() {
 
           {kalshiHist.length > 0 && (
             <div>
-              <h3>Últimas ventanas de 15 min — {symbol}</h3>
+              <h3>Últimas ventanas con señal clara — 15 min — {symbol}</h3>
+              <p className="muted">No son las últimas 5 ventanas seguidas: son las últimas 5 ventanas CON señal clara (la señal es rara y puede haber horas entre una y otra). Resultado medido como liquida Kalshi: cierre de la ventana contra su apertura.</p>
               <table className="league-table">
-                <thead><tr><th>Ventana</th><th>Señal</th><th>Precio</th><th>Después</th><th>Resultado</th></tr></thead>
+                <thead><tr><th>Ventana</th><th>Señal</th><th>Apertura</th><th>Cierre</th><th>Cambio en la ventana</th><th>Resultado</th></tr></thead>
                 <tbody>
                   {kalshiHist.map((h, i) => (
                     <tr key={i}>
                       <td>{new Date(h.time * 1000).toLocaleTimeString('es-US', { hour: '2-digit', minute: '2-digit' })}</td>
                       <td className={h.key === 'buy' ? 'up' : 'down'}><b>{h.key === 'buy' ? '▲ SUBE' : '▼ BAJA'}</b> ({h.score})</td>
+                      <td>{fmt(h.open, currency)}</td>
                       <td>{fmt(h.price, currency)}</td>
                       <td className={h.changePct >= 0 ? 'up' : 'down'}>{h.changePct >= 0 ? '+' : ''}{h.changePct.toFixed(2)}%</td>
                       <td><b>{h.won ? '✅ Acertó' : '❌ Falló'}</b></td>

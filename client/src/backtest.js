@@ -4,6 +4,10 @@
 // calcula la señal con analyze() (la misma función del análisis en vivo)
 // y se comprueba si la dirección que sugería se cumplió en la vela
 // siguiente (cierre de la vela siguiente vs cierre de la vela actual).
+// Es la medida correcta para la señal GENERAL (1h). Para Kalshi 15m
+// NO vale: la ventana se liquida contra su precio objetivo, así que
+// la medida 15m vive en windowOutcome.js (cierre de la misma ventana
+// vs su apertura) y es la que usan la pestaña Kalshi y su backtest.
 // Solo cuentan las ventanas con señal clara (subida/bajada); las de
 // "Sin señal clara" no se cuentan ni como acierto ni como fallo.
 // Resultado: "acertó X de Y" con porcentaje. El pasado NO predice el

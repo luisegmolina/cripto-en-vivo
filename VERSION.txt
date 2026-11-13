@@ -1,3 +1,51 @@
+v13.4 — Medición Kalshi real + decisión por precio del contrato (13-nov-2026)
+- Medición 15m CORREGIDA (fallo metodológico): "Últimas ventanas" y el
+  backtest 15m comparaban el cierre de la vela SIGUIENTE con el cierre
+  actual. Eso no es lo que liquida Kalshi. Nuevo client/src/windowOutcome.js:
+  cada ventana se mide por su propio cierre contra su apertura (el precio
+  objetivo aproximado). Medido en vivo 13-nov-2026 ~03:10 UTC con velas
+  reales: la medida vieja daba 4/10 (40%) y la nueva 7/10 (70%); 8 de 13
+  ventanas claras discrepan entre ambas medidas. La señal general 1h
+  sigue con la medida de vela siguiente (correcta para ella).
+- Etiqueta honesta: "Últimas ventanas con señal clara — 15 min", con nota
+  de que no son las últimas 5 ventanas seguidas (la señal es rara, puede
+  haber horas entre una y otra). Tabla ahora con Apertura y Cierre.
+- SEÑAL DÉBIL: si la señal 15m acierta menos del 50% en las últimas
+  ventanas con señal clara, el veredicto muestra "⚠️ SEÑAL DÉBIL" junto
+  a SUBE/BAJA/ESPERAR, además de bajar la confianza (tope 60%, como antes).
+- Decisión REAL por precio del contrato (nuevo cashOutDecisionReal en
+  kalshi.js): ≥85¢ → COBRA AHORA (casi ganado); ≤15¢ → SAL ANTES DE
+  PERDER MÁS (casi perdido), salvo señal muy a favor (≥40) con más de
+  la mitad de la ventana por delante (>7,5 min), que aguanta con cuidado;
+  entre 15¢ y 85¢ manda la regla por señal de siempre. P&L real en $
+  ((actual − medio) × cantidad / 100). Regla documentada en una línea
+  en la UI. La posición VIRTUAL no cambia (sigue con precio USD).
+- Cambio 24h UNIFICADO: /api/markets ahora usa Coinbase en paralelo
+  como primaria (misma fuente que /api/ticker); Kraken batch queda de
+  respaldo. Antes el mismo BTC mostraba −4,84% (ticker, Coinbase) y
+  −1,70% (grid, Kraken). Verificado en vivo: ticker −5,07% y Mercados
+  −5,07% (diff 0,000 puntos), misma apertura 24h.
+- Historial de mis apuestas (§3b en Kalshi): posiciones cerradas con
+  resultado (ganó/perdió/empató) desde el P&L realizado de Kalshi
+  (realizedPnl) — si Kalshi no lo devuelve, dice "sin dato", no inventa
+  — y las operaciones (fills) más recientes. El servidor ahora devuelve
+  fills normalizados en getPositions.
+- Auto-refresco de posiciones reales cada 30 s mientras la pestaña
+  Kalshi está activa y hay conexión (mismo ritmo que /api/kalshi-market;
+  el servidor cachea posiciones 30 s), con aviso si la última
+  sincronización tiene más de 2 min.
+- Decisión real al frente: si hay una posición ABIERTA real, su
+  COBRA/AGUANTA/SAL aparece en un banner justo debajo del veredicto,
+  antes del formulario virtual.
+- kalshi.js: comentario de cabecera actualizado (decía que no había
+  conexión a Kalshi ni precios oficiales; desde v12 hay solo lectura
+  y desde v13.2 precios oficiales en centavos).
+- Panel de mercado PRO: se deja como está (punto opcional 8: su etiqueta
+  de estimado ya es visible). Nada de v7–v13.3 se quitó.
+- Pruebas tests-v13.4.mjs (56): medición de ventanas, decisión por
+  precio, cambio 24h unificado en vivo, estáticos y versión. La suite
+  v13.3 se actualizó a v13.4 (versión y etiqueta nueva).
+
 v13.3 — Kalshi en UNA sola pestaña (12-nov-2026)
 - La pestaña "Mi cuenta Kalshi" ya no existe: todo su contenido se movió
   dentro de la pestaña Kalshi, en una sola instancia completa de

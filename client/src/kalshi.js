@@ -1,6 +1,13 @@
 // Modo Kalshi 15 minutos — PRUEBA EDUCATIVA, no es recomendación de
-// inversión ni de apuesta, sin dinero real, sin conexión a la cuenta
-// de Kalshi y sin precios ni probabilidades oficiales de Kalshi.
+// inversión ni de apuesta. Desde v12 la app SÍ se conecta a la cuenta
+// de Kalshi en SOLO LECTURA (ver posiciones reales, saldo e historial
+// con la API Key del usuario, clave cifrada AES-256-GCM en el servidor)
+// y desde v13.2 SÍ muestra los precios oficiales del contrato de
+// Kalshi en centavos (precio SÍ/NO del mercado actual, vía
+// /api/kalshi-market). La app nunca compra, vende ni cierra posiciones:
+// todo lo que hace es leer y sugerir. La "probabilidad estimada" de
+// la señal es propia, calculada de la señal (puntuación +
+// confluencia), NO es la probabilidad oficial de Kalshi.
 // Kalshi vende predicciones por ventanas (aquí, 15 minutos): al
 // cerrar la ventana se decide si la predicción acertó. Esta capa
 // ayuda a leer el mercado en esa ventana: ¿SUBE o BAJA en los
@@ -124,6 +131,53 @@ export function cashOutDecision({ dir, entryPrice, currentPrice, amount, signalK
     return { key: 'hold-careful', label: 'AGUANTA CON CUIDADO', title: 'Aguanta con cuidado: la señal sigue a tu favor, pero vas perdiendo', text: 'El precio va en tu contra de momento, pero la señal de 15 minutos sigue en tu dirección. No es momento de cobrar (no hay ganancia), pero pon un límite: si la señal se da la vuelta, sal.', pnl, pnlPct, color: '#f59e0b' };
   }
   return { key: 'wait', label: 'ESPERA', title: 'Espera', text: 'No hay una decisión clara por la señal. Espera a que se defina la ventana.', pnl, pnlPct, color: '#94a3b8' };
+}
+
+// Decisión COBRO / AGUANTO / SALGO para una posición REAL de Kalshi
+// (v13.4). La regla por SEÑAL sola no basta: en Kalshi lo que manda
+// es el PRECIO DEL CONTRATO en centavos (el contrato paga $1 si
+// aciertas y $0 si no). Por eso esta función mira PRIMERO el precio:
+// - Contrato a ≥85¢: casi ganado. COBRA AHORA y asegura: quedan
+//   como mucho 15¢ por ganar y puedes perder 85¢ si se da la vuelta.
+// - Contrato a ≤15¢: casi perdido. SAL ANTES DE PERDER MÁS, salvo
+//   que la señal esté MUY a tu favor (puntuación ≥40 en tu dirección)
+//   Y quede más de la mitad de la ventana (>7,5 min): entonces
+//   AGUANTA CON CUIDADO, porque aún hay tiempo de que se dé la vuelta.
+// - Entre 15¢ y 85¢: manda la regla por señal de cashOutDecision
+//   (la misma que la posición virtual), con el P&L real en $
+//   ((precio actual − precio medio) × cantidad / 100).
+// Entradas en CENTAVOS (1–99): entryPriceCents = precio medio,
+// currentPriceCents = precio actual del lado que tienes, count =
+// número de contratos. windowRemainingMs opcional (ms hasta el
+// cierre de la ventana). Devuelve lo mismo que cashOutDecision más
+// priceRule: 'high' | 'low' | 'low-but-signal' | 'signal', y
+// reason: 'contract-price' | 'signal'.
+export function cashOutDecisionReal({ dir, entryPriceCents, currentPriceCents, count, signalKey, signalScore, entryScore = null, windowRemainingMs = null }) {
+  const entry = Number(entryPriceCents);
+  const cur = Number(currentPriceCents);
+  const n = Number(count);
+  if (!dir || !Number.isFinite(entry) || entry <= 0 || entry > 100 || !Number.isFinite(cur) || cur < 0 || cur > 100 || !Number.isFinite(n) || n <= 0) {
+    return { key: 'none', label: 'SIN DATO', title: 'Sin precio del contrato', text: 'Falta el precio medio o el precio actual del contrato en centavos para decidir. Comprueba la posición en Kalshi.', pnl: null, pnlPct: null, priceRule: 'signal', reason: 'signal', color: '#94a3b8' };
+  }
+  // P&L real en $: cada centavo de movimiento vale $0,01 por contrato.
+  const pnl = ((cur - entry) * n) / 100;
+  const favors = signalFavorsPosition(dir, signalKey);
+  const strongFavor = favors === 'favors' && signalScore != null && Math.abs(signalScore) >= 40;
+  const lotsOfTimeLeft = windowRemainingMs != null && windowRemainingMs > (7.5 * 60 * 1000);
+  if (cur >= 85) {
+    return { key: 'cash', label: 'COBRA AHORA', title: 'Cobra ahora: tu contrato vale 85¢ o más — casi ganado', text: `El lado que tienes vale ${cur}¢ de $1: está casi ganado. Quedan como mucho ${100 - cur}¢ por ganar y puedes perder ${cur}¢ si la ventana se da la vuelta en los últimos minutos. Cobrar asegura casi todo.`, pnl, pnlPct: null, priceRule: 'high', reason: 'contract-price', color: '#22c55e' };
+  }
+  if (cur <= 15) {
+    if (strongFavor && lotsOfTimeLeft) {
+      return { key: 'hold-careful', label: 'AGUANTA CON CUIDADO', title: 'Aguanta con cuidado: vale 15¢ o menos, pero la señal está muy a tu favor y queda más de la mitad de la ventana', text: `El contrato vale solo ${cur}¢, casi perdido, pero la señal 15m está muy a tu favor (puntuación ${signalScore}) y quedan más de 7 minutos y medio. Hay tiempo de que se dé la vuelta, pero si la señal se debilita o el precio baja más, sal sin esperar al cierre.`, pnl, pnlPct: null, priceRule: 'low-but-signal', reason: 'contract-price', color: '#f59e0b' };
+    }
+    return { key: 'exit', label: 'SAL ANTES DE PERDER MÁS', title: 'Sal antes de perder más: tu contrato vale 15¢ o menos — casi perdido', text: `El lado que tienes vale solo ${cur}¢ de $1: está casi perdido. Quedan como mucho ${cur}¢ por recuperar y la ventana se está acabando. Salir ahora limita la pérdida en vez de esperar a que cierre en $0.`, pnl, pnlPct: null, priceRule: 'low', reason: 'contract-price', color: '#ef4444' };
+  }
+  // Entre 15¢ y 85¢: manda la señal, como en la posición virtual.
+  // cashOutDecision trabaja con precios en las mismas unidades para
+  // el signo del movimiento; el P&L se sobrescribe con el real en $.
+  const bySignal = cashOutDecision({ dir, entryPrice: entry, currentPrice: cur, amount: (entry * n) / 100, signalKey, signalScore, entryScore });
+  return { ...bySignal, pnl, pnlPct: null, priceRule: 'signal', reason: 'signal' };
 }
 
 // Precio sugerido para cobrar (educativo): si la decisión es COBRA
