@@ -152,3 +152,9 @@ h3 { margin: 12px 0 4px; font-size: 15px; }
   table { break-inside: avoid; }
   * { animation: none !important; transition: none !important; }
 }
+
+/* --- v11: MODO KALSHI 15 MIN --- */
+.kalshi-toggle-row { margin-top: 16px; }
+.kalshi-toggle-row button.on { background: #f59e0b; color: #111827; border-color: #f59e0b; font-weight: 700; }
+.kalshi-card { border-width: 3px; }
+.countdown { font-size: 22px; color: #f59e0b; letter-spacing: 1px; }

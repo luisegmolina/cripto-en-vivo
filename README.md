@@ -25,6 +25,12 @@ exchanges**, y el frontend (React) solo habla con ese servidor en
   > NO es una recomendación de inversión.
 - **Alertas en pantalla** cuando aparece una señal nueva, y notificación
   del navegador opcional (con permiso).
+- **Modo Kalshi 15 min (v11):** interruptor arriba que pone el 15m como
+  timeframe principal: ventana actual con cuenta atrás, señal SUBE /
+  BAJA / ESPERAR para la ventana, y sección "¿Cobro o me quedo?" con
+  posición virtual (entrada, dirección, cantidad). Dinero virtual,
+  educativo, sin cuenta ni API de Kalshi; la probabilidad es estimada
+  propia, no oficial.
 - **Fuente visible:** la página muestra qué fuente está dando el precio
   (Coinbase → Kraken → Binance US → CoinGecko, en cadena con timeout de 5 s
   por fuente y caché de 1–2 s). Si una falla, pasa a la siguiente.
@@ -37,6 +43,54 @@ exchanges**, y el frontend (React) solo habla con ese servidor en
   Si una fuente devuelve 429, entra en pausa de 60 s y no se reintenta;
   el log solo avisa la primera vez, no cada 5 s. Caché de markets: 15 s;
   el cliente sondea las pestañas cada 10 s.
+
+## Novedades v11: Modo Kalshi 15 minutos (12-nov-2026)
+
+El amigo de Luis revisó la web y aclaró el objetivo real: apoyar las
+predicciones en la app de Kalshi, donde se predice BTC y otros cada
+15 minutos, y en ese tiempo hay que decidir si cobrar lo que va
+ganando o salir. La v11 añade una capa encima de todo lo anterior
+(nada de v7–v10 se quita):
+
+1. **Modo Kalshi 15 min:** interruptor visible arriba ("Activar Modo
+   Kalshi 15 min"). Al activarlo, el timeframe principal pasa a 15m;
+   al apagarlo, vuelve a 1h. El veredicto general, la confluencia,
+   el historial, el backtest, la liga, el screener y el resto siguen
+   igual debajo.
+2. **Cuenta atrás de la ventana:** la ventana actual de 15 minutos
+   (empieza a :00, :15, :30 y :45), cuánto falta para que cierre
+   (MM:SS), barra de % transcurrido, precio de referencia al inicio
+   de la ventana (apertura de la vela 15m) y cuánto se ha movido el
+   precio dentro de la ventana.
+3. **Señal para la ventana:** veredicto gigante **SUBE / BAJA /
+   ESPERAR** para los próximos 15 minutos, con puntuación, fuerza y
+   confianza, el porqué en simple (RSI, MACD, EMA, momentum) y el
+   backtest en 15m ("acertó X de Y" en las ventanas pasadas).
+4. **¿Cobro o me quedo?:** el usuario pone su posición virtual
+   (precio de entrada, dirección SUBE/BAJA y cantidad virtual, solo
+   local) y la app dice en claro: **COBRA AHORA** (vas ganando y la
+   señal se debilitó o se dio la vuelta), **AGUANTA** (vas ganando y
+   la señal sigue a tu favor), **SAL ANTES DE PERDER MÁS** (vas
+   perdiendo y la señal va en contra), **AGUANTA CON CUIDADO**
+   (vas perdiendo pero la señal sigue a tu favor) o **ESPERA** (sin
+   señal clara). Muestra la ganancia/pérdida virtual en $ y % y un
+   precio sugerido para cobrar/salir (precio actual si es cobrar o
+   salir; objetivo a 1 ATR 15m si es aguantar). También guarda la
+   puntuación de la señal al entrar, para detectar si se debilitó.
+5. **Probabilidad estimada propia:** la app muestra una probabilidad
+   estimada a partir de la señal (puntuación + confluencia). **NO es
+   la probabilidad oficial de Kalshi** y va etiquetada como tal en
+   la app. No hay integración con la API real de Kalshi, no hay
+   cuenta de Kalshi conectada, no hay dinero real.
+6. **Últimas ventanas de 15 min:** tabla con las últimas 5 ventanas
+   y si la señal acertó o falló en cada una.
+> ⚠️ Prueba educativa con dinero VIRTUAL. Nada de esto es una
+> recomendación de inversión ni de apuesta, y no promete ganancias.
+> En 15 minutos el precio se mueve mucho y la señal falla a menudo
+> (backtest BTC 15m medido el 12-nov: 7 de 12, 58%).
+Pruebas en `tests-v11.mjs`: 34 de 34 pasaron (ventana, cuenta atrás,
+veredicto, decisión cobrar/aguantar/salir y servidor local con velas
+reales de 15m).
 
 ## Novedades v10: correcciones de las capturas del 10-nov 20:56 (11-nov-2026)
 
@@ -234,6 +288,8 @@ ofrece un apodo local (sin contraseña, sin servidor).
 | PWA instalable + notificaciones | REAL (locales vía service worker); push real con servidor: NO EXISTE |
 | Tarjeta para compartir (texto + PNG) | REAL (se genera en tu navegador) |
 | Screener | REAL (cálculo sobre datos reales), prueba educativa |
+| Modo Kalshi 15 min: ventana, cuenta atrás, señal SUBE/BAJA, ¿cobro o salgo? | REAL (cálculo local sobre velas reales de 15m), pero prueba educativa: sin cuenta de Kalshi, sin API de Kalshi, sin dinero real; la probabilidad es estimada propia, NO oficial de Kalshi |
+| Posición virtual Kalshi (entrada, dirección, cantidad) | LOCAL (localStorage, dinero virtual) |
 
 ## Novedades v6 y anteriores
 

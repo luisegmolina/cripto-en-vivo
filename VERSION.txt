@@ -64,3 +64,19 @@ Fecha: 2026-11-11
   como aproximados; si no hay fuente, retryInSeconds y la app dice
   cuándo se reintentará. Pruebas tests-v10.mjs: 26/26 con datos reales
   (backtest BTC 1h: 10 de 18, 56%).
+
+- v11 (2026-11-12): MODO KALSHI 15 MIN (capa encima, nada de v7-v10 se
+  quita). Interruptor visible arriba; al activarlo el timeframe
+  principal pasa a 15m (al apagarlo vuelve a 1h). Ventana actual de
+  15 min (:00/:15/:30/:45) con cuenta atrás MM:SS, barra de %
+  transcurrido, precio de referencia (apertura de la vela 15m) y
+  movimiento en la ventana. Señal SUBE / BAJA / ESPERAR para los
+  próximos 15 minutos, con puntuación, fuerza, confianza y porqué en
+  simple; probabilidad ESTIMADA propia (NO oficial de Kalshi).
+  Sección "¿Cobro o me quedo?": posición virtual (entrada, dirección,
+  cantidad, solo local) y decisión COBRA AHORA / AGUANTA / SAL ANTES
+  DE PERDER MÁS / AGUANTA CON CUIDADO / ESPERA, con P&L virtual en
+  $ y % y precio sugerido para cobrar/salir. Backtest 15m (BTC 15m:
+  7 de 12, 58% medido el 12-nov) y últimas 5 ventanas con acierto/
+  fallo. Sin API real de Kalshi, sin cuenta, sin dinero real.
+  Pruebas tests-v11.mjs: 34/34 con datos reales del servidor local.
