@@ -10,6 +10,9 @@ import { MISSIONS, levelForXp, xpIntoLevel, XP_PER_LEVEL } from './missions.js';
 import { screenOpportunities } from './screener.js';
 import { shouldFireAlert, ALERT_COOLDOWN_MS, dedupePriceAlerts } from './alerts.js';
 import { shareText, whatsappUrl, drawShareCard, APP_URL } from './shareCard.js';
+import { getToken, register, login, me, logout, apiAuth } from './auth.js';
+import AdminPanel from './AdminPanel.jsx';
+import KalshiConnect from './KalshiConnect.jsx';
 
 const ASSETS = [
   { symbol: 'BTC', name: 'Bitcoin' }, { symbol: 'ETH', name: 'Ethereum' },
@@ -21,7 +24,7 @@ const ASSETS = [
 const INTERVALS = ['1m', '5m', '15m', '1h', '6h', '1d'];
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v11 — Modo Kalshi 15 min: ventana, cuenta atrás, señal SUBE/BAJA y ¿cobro o salgo?';
+const VERSION_LABEL = 'v12 — Usuarios + Kalshi solo lectura (admin /admin)';
 
 const ACHIEVEMENTS = [
   { id: 'primera_operacion', name: 'Primera operación virtual', desc: 'Compra o vende por primera vez con dinero virtual.' },
@@ -146,6 +149,97 @@ export default function App() {
   const [kalshiAmount, setKalshiAmount] = useState(kalshiPos.amount || '100');
   const [kalshiMsg, setKalshiMsg] = useState('');
   useEffect(() => { saveLS('cev_kalshi_position_v1', { entryPrice: kalshiEntryPrice, dir: kalshiDir, amount: kalshiAmount, entryScore: kalshiPos.entryScore }); }, [kalshiEntryPrice, kalshiDir, kalshiAmount]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- v12: USUARIOS + KALSHI SOLO LECTURA (capa encima, no reemplaza nada) ---
+  // Sin sesión, la app pública funciona igual que antes: precios, señales,
+  // cartera virtual, alertas y liga siguen siendo locales y sin registro.
+  const [token, setTokenState] = useState(() => getToken());
+  const [user, setUser] = useState(null);
+  const [view, setView] = useState(() => (typeof window !== 'undefined' && window.location.hash === '#admin' ? 'admin' : 'app'));
+  const [showAuth, setShowAuth] = useState(null); // 'login' | 'register' | null
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authName, setAuthName] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+  const serverSyncDone = useRef(false);
+
+  // Sincronización opcional cartera/alertas con el servidor: si el servidor
+  // tiene datos (trades o posiciones en la cartera, o alertas), se usan;
+  // si no tiene nada, se suben los locales. Los errores se ignoran en silencio.
+  async function pullOrPushServerData() {
+    try {
+      const [pf, al] = await Promise.allSettled([
+        apiAuth('/api/me/portfolio'),
+        apiAuth('/api/me/alerts'),
+      ]);
+      if (pf.status === 'fulfilled' && pf.value && pf.value.portfolio) {
+        const srv = pf.value.portfolio;
+        const hasData = (srv.trades && srv.trades.length > 0) || (srv.holdings && Object.keys(srv.holdings).length > 0);
+        if (hasData) setPortfolio(srv);
+        else apiAuth('/api/me/portfolio', { method: 'PUT', body: { portfolio } }).catch(() => {});
+      }
+      if (al.status === 'fulfilled' && al.value && al.value.alerts) {
+        const srvAlerts = al.value.alerts;
+        if (Array.isArray(srvAlerts) && srvAlerts.length > 0) setPriceAlerts(dedupePriceAlerts(srvAlerts));
+        else apiAuth('/api/me/alerts', { method: 'PUT', body: { alerts: priceAlerts } }).catch(() => {});
+      }
+    } catch { /* sincronización opcional: nunca rompe la app */ }
+    serverSyncDone.current = true;
+  }
+
+  // Al cargar, si hay token guardado, valida la sesión. 401 = token
+  // inválido o caducado: se borra y se sigue sin sesión.
+  useEffect(() => {
+    const t = getToken();
+    if (!t) return;
+    me().then((u) => { setUser(u); pullOrPushServerData(); }).catch((e) => {
+      if (e.status === 401) setTokenState(null);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const onHash = () => setView(window.location.hash === '#admin' ? 'admin' : 'app');
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  const goAdmin = () => { window.location.hash = '#admin'; setView('admin'); };
+  const goApp = () => { window.location.hash = ''; setView('app'); };
+
+  async function handleAuthSubmit(e) {
+    e.preventDefault();
+    setAuthError('');
+    if (showAuth === 'register') {
+      if (!authName.trim()) { setAuthError('Pon tu nombre.'); return; }
+      if (authPassword.length < 8) { setAuthError('La contraseña debe tener al menos 8 caracteres.'); return; }
+    }
+    if (!authEmail.trim() || !authPassword) { setAuthError('Pon tu email y tu contraseña.'); return; }
+    setAuthBusy(true);
+    try {
+      const data = showAuth === 'register'
+        ? await register({ email: authEmail.trim(), password: authPassword, name: authName.trim() })
+        : await login({ email: authEmail.trim(), password: authPassword });
+      setTokenState(getToken());
+      setUser(data.user || null);
+      setShowAuth(null);
+      setAuthPassword('');
+      setAuthName('');
+      serverSyncDone.current = false;
+      pullOrPushServerData();
+    } catch (err) { setAuthError(err.message || 'No se pudo entrar.'); }
+    finally { setAuthBusy(false); }
+  }
+
+  async function handleLogout() {
+    await logout();
+    setTokenState(null);
+    setUser(null);
+    serverSyncDone.current = false;
+    goApp();
+  }
+
   const [markets, setMarkets] = useState([]);
   const [ticker, setTicker] = useState(null);
   const [candles, setCandles] = useState([]);
@@ -259,6 +353,18 @@ export default function App() {
   };
   useEffect(() => { saveLS('cev_portfolio_v1', portfolio); }, [portfolio]);
   useEffect(() => { saveLS('cev_price_alerts_v1', priceAlerts); }, [priceAlerts]);
+
+  // v12: sincronización opcional con el servidor cuando hay sesión: al
+  // cambiar la cartera o las alertas, se suben con debounce de 1.5 s.
+  // Si el servidor responde error, se ignora en silencio (lo local manda).
+  useEffect(() => {
+    if (!user || !serverSyncDone.current) return;
+    const t = setTimeout(() => {
+      apiAuth('/api/me/portfolio', { method: 'PUT', body: { portfolio } }).catch(() => {});
+      apiAuth('/api/me/alerts', { method: 'PUT', body: { alerts: priceAlerts } }).catch(() => {});
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [portfolio, priceAlerts, user]);
 
   const completeMission = (id) => {
     const today = localDay(0);
@@ -979,6 +1085,44 @@ export default function App() {
     : 'Neutral: el mercado no se decide';
   const fgColor = !fearGreed ? '#94a3b8' : fearGreed.value <= 24 ? '#ef4444' : fearGreed.value <= 44 ? '#f97316' : fearGreed.value <= 55 ? '#eab308' : fearGreed.value <= 75 ? '#84cc16' : '#22c55e';
 
+  // v12: vista admin (#admin): muestra el panel de administración en vez
+  // de la app pública. Solo entra si el usuario es admin.
+  if (view === 'admin') {
+    return (
+      <div className="app">
+        <header>
+          <div><h1>₿ Cripto en Vivo</h1><p>Precios reales desde el servidor · React + Node · {VERSION_LABEL}</p></div>
+          <div className="row">
+            {user ? (
+              <>
+                <span className="badge">👤 {user.name || user.email}</span>
+                <button onClick={handleLogout}>Salir</button>
+              </>
+            ) : (
+              <button onClick={() => { goApp(); setShowAuth('login'); }}>Entrar</button>
+            )}
+          </div>
+        </header>
+        {!user ? (
+          <section className="card">
+            <h2>🛡️ Administración</h2>
+            <p className="muted">Entra con tu cuenta de administrador para ver esta vista.</p>
+            <div className="row"><button onClick={goApp}>← Volver a la app</button></div>
+          </section>
+        ) : user.role === 'admin' ? (
+          <AdminPanel token={token} onBack={goApp} />
+        ) : (
+          <section className="card">
+            <h2>🛡️ Administración</h2>
+            <p className="error">No tienes permiso de administrador.</p>
+            <div className="row"><button onClick={goApp}>← Volver a la app</button></div>
+          </section>
+        )}
+        <footer>Fuente de datos: APIs públicas de Coinbase, Kraken, Binance US y CoinGecko, consultadas por el servidor. {APP_URL}</footer>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       {/* Ticker tape superior: los 10 precios en vivo, en movimiento */}
@@ -1000,7 +1144,49 @@ export default function App() {
       <header>
         <div><h1>₿ Cripto en Vivo</h1><p>Precios reales desde el servidor · React + Node · {VERSION_LABEL}</p></div>
         <div className="badge">{source ? `Fuente: ${source}` : 'Conectando…'} · {updatedAt ? new Date(updatedAt).toLocaleTimeString('es-US') : ''}{latencyMs != null ? ` · latencia ${latencyMs} ms` : ''}</div>
+        <div className="row">
+          {!user ? (
+            <>
+              <button onClick={() => { setShowAuth('login'); setAuthError(''); }}>Entrar</button>
+              <button onClick={() => { setShowAuth('register'); setAuthError(''); }}>Crear cuenta</button>
+            </>
+          ) : (
+            <>
+              <span className="badge">👤 {user.name || user.email}</span>
+              {user.role === 'admin' && <button onClick={goAdmin}>🛡️ Admin</button>}
+              <button onClick={handleLogout}>Salir</button>
+            </>
+          )}
+        </div>
       </header>
+
+      {/* v12: modal de entrar / crear cuenta (sin registro obligatorio para ver precios y señales) */}
+      {showAuth && (
+        <section className="card">
+          <h2>{showAuth === 'register' ? 'Crear cuenta' : 'Entrar'}</h2>
+          <p className="muted">La cuenta guarda tu cartera virtual y tus alertas en el servidor, y te deja conectar tu Kalshi en solo lectura. Ver precios y señales no necesita cuenta.</p>
+          <form onSubmit={handleAuthSubmit}>
+            <div className="row">
+              {showAuth === 'register' && (
+                <label>Nombre: <input type="text" value={authName} autoComplete="name" onChange={(e) => setAuthName(e.target.value)} placeholder="Tu nombre" /></label>
+              )}
+              <label>Email: <input type="email" value={authEmail} autoComplete="email" onChange={(e) => setAuthEmail(e.target.value)} placeholder="tu@email.com" /></label>
+              <label>Contraseña: <input type="password" value={authPassword} autoComplete={showAuth === 'register' ? 'new-password' : 'current-password'} onChange={(e) => setAuthPassword(e.target.value)} placeholder="Mínimo 8 caracteres" /></label>
+              <button type="submit" disabled={authBusy}>{authBusy ? '…' : showAuth === 'register' ? 'Crear mi cuenta' : 'Entrar'}</button>
+              <button type="button" onClick={() => setShowAuth(null)}>Cancelar</button>
+            </div>
+          </form>
+          {authError && <p className="error">{authError}</p>}
+          <p className="muted">
+            {showAuth === 'login' ? (
+              <>¿No tienes cuenta? <button onClick={() => { setShowAuth('register'); setAuthError(''); }}>Crear cuenta</button></>
+            ) : (
+              <>¿Ya tienes cuenta? <button onClick={() => { setShowAuth('login'); setAuthError(''); }}>Entrar</button></>
+            )}
+          </p>
+          <p className="muted">¿Olvidaste tu contraseña? Pídele al admin que la resetee.</p>
+        </section>
+      )}
 
       <p className="warn">⚠️ Prueba educativa con dinero VIRTUAL. Nada de esto es una recomendación de inversión, no hay dinero real ni registro obligatorio. Tu cartera, liga, misiones y alertas viven solo en este navegador.</p>
 
@@ -1091,6 +1277,13 @@ export default function App() {
             )}
           </div>
           <p className="muted">Regla simple: si vas ganando y la señal se dio la vuelta, cobra. Si vas perdiendo y la señal va en tu contra, sal. Si la señal sigue a tu favor, aguanta hasta el cierre de la ventana. Todo virtual: nada de esto mueve dinero real ni tu cuenta de Kalshi.</p>
+
+          {/* v12: KALSHI REAL SOLO LECTURA — posiciones de verdad, nunca opera */}
+          {user ? (
+            <KalshiConnect token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} currentPrice={kalshiPrice} currency={currency} />
+          ) : (
+            <p className="muted">🔐 Para conectar tu Kalshi, entra o crea tu cuenta (solo lectura: la app nunca opera por ti).</p>
+          )}
 
           {kalshiHist.length > 0 && (
             <div>
