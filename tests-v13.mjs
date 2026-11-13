@@ -34,13 +34,13 @@ const cssSrc = readFileSync('./client/src/index.css', 'utf8');
 // 1. Pestañas: Kalshi por defecto, lo demás aparte, sin ruido.
 console.log('— pestañas —');
 ok('pestaña por defecto es kalshi', appSrc.includes("useState('kalshi')"));
-ok('hay 7 pestañas (kalshi, mercados, grafico, cuenta, cartera, liga, admin)', ['kalshi', 'mercados', 'grafico', 'cuenta', 'cartera', 'liga'].every((t) => appSrc.includes(`id: '${t}'`)) && appSrc.includes('Admin'));
+ok('hay 6 pestañas (kalshi, mercados, grafico, cartera, liga, admin) — v13.3 quitó "cuenta"', ['kalshi', 'mercados', 'grafico', 'cartera', 'liga'].every((t) => appSrc.includes(`id: '${t}'`)) && appSrc.includes('Admin') && !appSrc.includes("id: 'cuenta'"));
 ok('sin resto de depuración "(admin /admin)"', !appSrc.includes('(admin /admin)'));
 ok('sin interruptor ni estado kalshiMode', !appSrc.includes('kalshiMode'));
 ok('ticker tape oculto en la pestaña Kalshi', appSrc.includes("activeTab !== 'kalshi'"));
 ok('CSS de pestañas presente', cssSrc.includes('.app-tabs'));
 ok('sección Kalshi solo en su pestaña', appSrc.includes("{activeTab === 'kalshi' && ("));
-ok('Mi cuenta Kalshi es su propia pestaña con KalshiConnect completo', appSrc.includes("{activeTab === 'cuenta' && (") && appSrc.includes('Mi cuenta Kalshi'));
+ok('Mi cuenta Kalshi vive DENTRO de la pestaña Kalshi, no aparte (v13.3)', !appSrc.includes("{activeTab === 'cuenta' && (") && kcSrc.includes('Mi cuenta</h3>'));
 
 // 2. Gráfico: se crea al entrar en la pestaña y repinta.
 console.log('— gráfico —');
@@ -65,7 +65,7 @@ ok('sin precio actual se explica', describePosition({ count: 1, avgPrice: 40, cu
 ok('posición sana no lleva nota', describePosition({ count: 2, avgPrice: 40, currentPrice: 55 }) === null);
 ok('KalshiConnect no convierte null en 0 (numOrNull)', kcSrc.includes('numOrNull') && !kcSrc.includes('const avg = Number(pos.avgPrice)'));
 ok('KalshiConnect muestra la nota de la posición', kcSrc.includes('pos.note'));
-ok('versión compacta de KalshiConnect para la pestaña Kalshi', kcSrc.includes('compact') && appSrc.includes('<KalshiConnect compact'));
+ok('KalshiConnect completo (no compacto) dentro de la pestaña Kalshi (v13.3)', !kcSrc.includes('compact') && appSrc.includes('<KalshiConnect token='));
 
 // 5. Señal 15m fallando: aviso + confianza bajada.
 console.log('— señal 15m fallando —');

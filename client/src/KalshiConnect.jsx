@@ -5,6 +5,13 @@
 // conectar solo se ve keyIdPreview. La app nunca compra, vende ni cierra
 // posiciones por el usuario: todo lo que hace es leer y sugerir, con la
 // misma lógica de ¿cobro o salgo? de la posición virtual (./kalshi.js).
+// v13.3: la pestaña "Mi cuenta Kalshi" ya no existe: TODO vive aquí, en
+// una sola instancia dentro de la pestaña Kalshi, en este orden:
+//   §3 Mis posiciones de Kalshi (abiertas + cerradas)
+//   §4 Mi cuenta (estado, saldo, botones, formulario de conexión)
+// El aviso de solo lectura sale una sola vez, arriba. La predicción de
+// la ventana, el ¿Cobro o me quedo? virtual y las últimas ventanas viven
+// en App.jsx, alrededor de este componente.
 import React, { useEffect, useRef, useState } from 'react';
 import { apiAuth } from './auth.js';
 import { cashOutDecision } from './kalshi.js';
@@ -49,7 +56,7 @@ function numOrNull(v) {
   return Number(v);
 }
 
-export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, currentPrice, referencePrice, referenceSource, currency, compact = false, onGoAccount = null }) {
+export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, currentPrice, referencePrice, referenceSource, currency, user = null, onLogout = null }) {
   const [status, setStatus] = useState(null); // {connected, keyIdPreview, lastSyncAt, status}
   const [positionsData, setPositionsData] = useState(null); // {connected, balance, positions, fetchedAt, source}
   const [loading, setLoading] = useState(true);
@@ -149,58 +156,43 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
   const openPositions = positions.filter((p) => (numOrNull(p.count) || 0) > 0);
   const closedPositions = positions.filter((p) => (numOrNull(p.count) || 0) === 0);
 
+  // v13.3: el formulario de conexión es el mismo en los dos casos: a la
+  // vista si no hay conexión, y colapsado (<details>) si ya la hay, para
+  // cambiar de clave sin estorbar. Nunca se muestra dos veces a la vez.
+  const connectForm = (
+    <form onSubmit={doConnect}>
+      <div className="row">
+        <label>Kalshi API Key ID: <input type="text" value={keyId} autoComplete="off" placeholder="Ej.: 12345678-…" onChange={(e) => setKeyId(e.target.value)} /></label>
+      </div>
+      <div className="row">
+        <label>Clave privada (.pem): <textarea rows={4} cols={50} value={privateKey} autoComplete="off" placeholder="-----BEGIN PRIVATE KEY----- …" onChange={(e) => setPrivateKey(e.target.value)} /></label>
+      </div>
+      <div className="row">
+        <label>O sube el archivo .pem: <input ref={fileRef} type="file" accept=".pem,application/x-pem-file,text/plain" onChange={onPemFile} /></label>
+        {fileName && <span className="muted">Archivo: {fileName} (el contenido no se muestra)</span>}
+      </div>
+      <div className="row">
+        <button type="submit" disabled={busy}>{busy ? 'Conectando…' : 'Conectar Kalshi (solo lectura)'}</button>
+      </div>
+      <p className="muted">Tu clave privada se envía cifrada al servidor y nunca se muestra completa: después de conectar solo verás el Key ID. No se guarda en este navegador.</p>
+    </form>
+  );
+
   return (
     <div>
-      <h3>📡 Mi cuenta de Kalshi — solo lectura</h3>
+      {/* v13.3 §3 — Mis posiciones de Kalshi (solo lectura). */}
+      <h3>📡 Mis posiciones de Kalshi — solo lectura</h3>
       <p className="warn">⚠️ SOLO LECTURA: esta app nunca compra, vende ni cierra posiciones por ti. Solo muestra tus posiciones reales de Kalshi y te sugiere, con la misma regla de la posición virtual, si cobrar o salir. Para operar tienes que hacerlo tú en Kalshi.</p>
       {loading && <p className="muted">Comprobando conexión con Kalshi…</p>}
       {error && <p className="error">{error}</p>}
       {msg && <p className="muted">{msg}</p>}
 
-      {status && (
-        <div className="stats">
-          <div><span>Estado</span><b>{connected ? '✅ Conectado' : '— No conectado'}</b></div>
-          <div><span>Key ID</span><b>{status.keyIdPreview || '—'}</b></div>
-          <div><span>Última sincronización</span><b>{status.lastSyncAt ? new Date(status.lastSyncAt).toLocaleString('es-US') : '—'}</b></div>
-          <div><span>Detalle</span><b>{status.status || '—'}</b></div>
-        </div>
-      )}
-
-      {!connected && !loading && !compact && (
-        <form onSubmit={doConnect}>
-          <div className="row">
-            <label>Kalshi API Key ID: <input type="text" value={keyId} autoComplete="off" placeholder="Ej.: 12345678-…" onChange={(e) => setKeyId(e.target.value)} /></label>
-          </div>
-          <div className="row">
-            <label>Clave privada (.pem): <textarea rows={4} cols={50} value={privateKey} autoComplete="off" placeholder="-----BEGIN PRIVATE KEY----- …" onChange={(e) => setPrivateKey(e.target.value)} /></label>
-          </div>
-          <div className="row">
-            <label>O sube el archivo .pem: <input ref={fileRef} type="file" accept=".pem,application/x-pem-file,text/plain" onChange={onPemFile} /></label>
-            {fileName && <span className="muted">Archivo: {fileName} (el contenido no se muestra)</span>}
-          </div>
-          <div className="row">
-            <button type="submit" disabled={busy}>{busy ? 'Conectando…' : 'Conectar Kalshi (solo lectura)'}</button>
-          </div>
-          <p className="muted">Tu clave privada se envía cifrada al servidor y nunca se muestra completa: después de conectar solo verás el Key ID. No se guarda en este navegador.</p>
-        </form>
-      )}
-
-      {!connected && !loading && compact && (
-        <p className="muted">🔐 Kalshi no conectado. <button onClick={() => onGoAccount && onGoAccount()}>Conectar Kalshi en Mi cuenta</button></p>
+      {!connected && !loading && (
+        <p className="muted">🔐 Kalshi no conectado: conecta tu cuenta abajo, en «Mi cuenta», para ver tus posiciones reales, tu saldo y tu historial.</p>
       )}
 
       {connected && (
         <div>
-          <div className="row">
-            <button onClick={load} disabled={loading}>Actualizar posiciones</button>
-            <button onClick={doDisconnect} disabled={busy}>Desconectar Kalshi</button>
-          </div>
-          {balance && (
-            <div className="stats">
-              <div><span>Balance</span><b>{fmtUsd(balance.balance)}</b></div>
-              <div><span>Valor de la cartera</span><b>{fmtUsd(balance.portfolioValue)}</b></div>
-            </div>
-          )}
           {openPositions.length === 0 && (
             <p className="muted">No tienes posiciones abiertas en Kalshi ahora mismo{positionsData && positionsData.fetchedAt ? ` (consultado a las ${new Date(positionsData.fetchedAt).toLocaleTimeString('es-US')})` : ''}.{closedPositions.length > 0 ? ` Hay ${closedPositions.length} cerrada(s) abajo.` : ''}</p>
           )}
@@ -288,6 +280,40 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
             </div>
           )}
         </div>
+      )}
+
+      {/* v13.3 §4 — Mi cuenta: estado, saldo, botones y conexión. */}
+      <h3>👤 Mi cuenta</h3>
+      {user && (
+        <p className="muted">Sesión: <b>{user.name || user.email}</b> ({user.email}){user.role === 'admin' ? ' · administrador' : ''}</p>
+      )}
+      {status && (
+        <div className="stats">
+          <div><span>Estado</span><b>{connected ? '✅ Conectado' : '— No conectado'}</b></div>
+          <div><span>Key ID</span><b>{status.keyIdPreview || '—'}</b></div>
+          <div><span>Última sincronización</span><b>{status.lastSyncAt ? new Date(status.lastSyncAt).toLocaleString('es-US') : '—'}</b></div>
+          <div><span>Detalle</span><b>{status.status || '—'}</b></div>
+        </div>
+      )}
+      {connected && balance && (
+        <div className="stats">
+          <div><span>Balance</span><b>{fmtUsd(balance.balance)}</b></div>
+          <div><span>Valor de la cartera</span><b>{fmtUsd(balance.portfolioValue)}</b></div>
+        </div>
+      )}
+      {connected && (
+        <div className="row">
+          <button onClick={load} disabled={loading}>Actualizar posiciones</button>
+          <button onClick={doDisconnect} disabled={busy}>Desconectar Kalshi</button>
+          {onLogout && <button onClick={onLogout}>Salir de mi cuenta</button>}
+        </div>
+      )}
+      {!connected && !loading && connectForm}
+      {connected && (
+        <details>
+          <summary>Conectar con otra clave de Kalshi</summary>
+          {connectForm}
+        </details>
       )}
     </div>
   );

@@ -274,6 +274,30 @@ ofrece un apodo local (sin contraseña, sin servidor).
   local" (sin contraseña, sin servidor), que se usa en la liga semanal
   y en la tarjeta para compartir. Nada se envía a ningún servidor.
 
+## Novedades v13.3: Kalshi en UNA sola pestaña (12-nov-2026)
+
+Las dos pestañas de Kalshi eran un ir y venir: la predicción en
+**Kalshi** y la cuenta en **Mi cuenta Kalshi**. Ahora hay una sola
+pestaña **Kalshi**, con todo en orden de arriba a abajo:
+
+1. **Predicción de la ventana 15m** (como antes, lo primero).
+2. **¿Cobro o me quedo?** con tu posición (virtual o real).
+3. **Mis posiciones de Kalshi — solo lectura:** tabla de abiertas con
+   título, lado, apuesta, precio medio, precio actual, P&L y decisión;
+   debajo, sección pequeña de cerradas.
+4. **Mi cuenta:** estado de conexión, balance, valor de cartera,
+   botones Actualizar posiciones / Desconectar, y el formulario para
+   conectar (Key ID + clave privada) solo si no está conectado, o
+   colapsado si ya lo está. También aquí: tu sesión y el botón para
+   salir de tu cuenta, y tu perfil local (apodo).
+5. **Últimas ventanas** con acierto/fallo.
+
+Nada del contenido de la pestaña vieja se perdió, solo se movió. El
+aviso de solo lectura y el de liquidación BRTI quedan una sola vez,
+no duplicados. Las demás pestañas (Mercados, Gráfico y señal, Cartera
+virtual, Liga y misiones, Admin) quedan igual.
+Pruebas: `tests-v13.3.mjs` (29).
+
 ## Novedades v13.2: lado de Kalshi verificado + precio objetivo de Kalshi (12-nov-2026)
 
 Luis reportó con captura que una posición cerrada (KXBTC15M-26NOV122130-30,
@@ -325,17 +349,18 @@ de veredicto en el mismo minuto.
 Luis lo dijo claro: la app tenía muchísimo ruido y lo verdaderamente
 importante son las predicciones de Kalshi. Ahora la app se navega por
 pestañas, siempre visibles arriba: **Kalshi** (por defecto al entrar),
-**Mercados**, **Gráfico y señal**, **Mi cuenta Kalshi**, **Cartera
-virtual**, **Liga y misiones**, y **Admin** (solo si eres admin).
+**Mercados**, **Gráfico y señal**, **Cartera virtual**, **Liga y
+misiones**, y **Admin** (solo si eres admin). Desde v13.3, la pestaña
+Kalshi lo tiene todo junto: predicción, ¿cobro o salgo?, posiciones,
+cuenta y últimas ventanas (antes la cuenta vivía en su propia pestaña
+"Mi cuenta Kalshi").
 
 - **Pestaña KALSHI (limpia, sin ruido):** solo el Modo Kalshi 15 min
   — ventana actual con cuenta atrás, precio de referencia, veredicto
   gigante SUBE/BAJA/ESPERAR, porqué en simple, ¿Cobro o me quedo?
-  con tu posición (virtual o real si está conectada) y últimas
-  ventanas con acierto/fallo. Sin ticker tape, sin mercados, sin liga
-  ni misiones en esta pestaña. El formulario para conectar Kalshi vive
-  en **Mi cuenta Kalshi**; en la pestaña Kalshi solo se ven las
-  posiciones reales (versión compacta).
+  con tu posición (virtual o real si está conectada), tus posiciones
+  reales, tu cuenta y últimas ventanas con acierto/fallo. Sin ticker
+  tape, sin mercados, sin liga ni misiones en esta pestaña.
 - **Fallos del video del 12-nov, corregidos:**
   1. **Gráfico en blanco:** el gráfico se creaba una sola vez al
      montar la app; si el contenedor aún no tenía tamaño o las velas

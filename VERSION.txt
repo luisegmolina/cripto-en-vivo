@@ -1,3 +1,26 @@
+v13.3 — Kalshi en UNA sola pestaña (12-nov-2026)
+- La pestaña "Mi cuenta Kalshi" ya no existe: todo su contenido se movió
+  dentro de la pestaña Kalshi, en una sola instancia completa de
+  KalshiConnect (antes había dos: una compacta en Kalshi y una completa
+  en Cuenta, con el formulario solo en la segunda). Orden en Kalshi:
+  §1 predicción de la ventana 15m, §2 ¿Cobro o me quedo? (virtual o
+  real), §3 Mis posiciones de Kalshi (abiertas con título, lado, apuesta,
+  precio medio, precio actual, P&L y decisión; debajo, cerradas),
+  §4 Mi cuenta (estado, Key ID, última sincronización, balance, valor
+  de cartera, botones Actualizar posiciones / Desconectar, formulario
+  Key ID + clave privada solo si no está conectado, o colapsado
+  <details> si ya lo está; sesión y Salir de mi cuenta), §5 últimas
+  ventanas. El perfil local (apodo) también se mudó a Kalshi.
+- Avisos sin duplicar: solo lectura una sola vez (arriba de posiciones)
+  y liquidación BRTI una sola vez (en la predicción). Nada de las demás
+  pestañas cambió (Mercados, Gráfico y señal, Cartera virtual, Liga y
+  misiones, Admin).
+- Pruebas tests-v13.3.mjs (29): sin pestaña duplicada, 5 secciones en
+  orden, contenido preservado, avisos sin duplicar, versión. Tres
+  aserciones de tests-v13.mjs actualizadas a v13.3 (pestañas, cuenta
+  dentro de Kalshi, KalshiConnect completo); el resto de v13–v13.2
+  sigue igual.
+
 v13.2 — Lado de Kalshi verificado + precio objetivo de Kalshi (12-nov-2026)
 - Fallo de la captura de Luis (Mi cuenta Kalshi): posición KXBTC15M-26NOV122130-30,
   "BTC price up in next 15 mins?", Lado SÍ, cantidad 0, cuando él apostó a la BAJA.

@@ -24,7 +24,7 @@ const ASSETS = [
 const INTERVALS = ['1m', '5m', '15m', '1h', '6h', '1d'];
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v13 — Predicciones Kalshi al frente';
+const VERSION_LABEL = 'v13.3 — Kalshi en una sola pestaña';
 
 const ACHIEVEMENTS = [
   { id: 'primera_operacion', name: 'Primera operación virtual', desc: 'Compra o vende por primera vez con dinero virtual.' },
@@ -127,19 +127,20 @@ export default function App() {
   // El aviso "1m es ruido" solo sale si el usuario cambia a 1m a mano.
   const [candleInterval, setCandleInterval] = useState('15m');
 
-  // --- v13: PESTAÑAS. La pestaña KALSHI es la principal y la única
-  // sin ruido: solo las predicciones de Kalshi 15 min. Lo demás vive
-  // en su pestaña (Mercados, Gráfico, Mi cuenta, Cartera, Liga,
+  // --- v13.3: PESTAÑAS. La pestaña KALSHI es la principal y la única
+  // sin ruido: predicción 15 min, ¿cobro o salgo?, MIS posiciones de
+  // Kalshi y MI CUENTA, todo junto (la pestaña "Mi cuenta Kalshi"
+  // separada ya no existe: nada se perdió, se movió dentro de Kalshi).
+  // Lo demás vive en su pestaña (Mercados, Gráfico, Cartera, Liga,
   // Admin). Kalshi = predicciones por ventanas de 15 minutos: en ese
-  // tiempo hay que decidir si cobrar lo ganado o salir. Sin conexión
-  // a la cuenta de Kalshi, sin dinero real, sin probabilidades
-  // oficiales: todo virtual y educativo, solo en este navegador.
+  // tiempo hay que decidir si cobrar lo ganado o salir. Sin dinero
+  // real, sin probabilidades oficiales: todo virtual y educativo,
+  // solo en este navegador (la cuenta real de Kalshi es solo lectura).
   const [activeTab, setActiveTab] = useState('kalshi');
   const TABS = [
     { id: 'kalshi', label: '⏱️ Kalshi' },
     { id: 'mercados', label: '📊 Mercados' },
     { id: 'grafico', label: '📈 Gráfico y señal' },
-    { id: 'cuenta', label: '📡 Mi cuenta Kalshi' },
     { id: 'cartera', label: '💰 Cartera virtual' },
     { id: 'liga', label: '🏆 Liga y misiones' },
   ];
@@ -1331,8 +1332,9 @@ export default function App() {
               </>
       )}
 
-      {/* v13: la pestaña KALSHI es el Modo Kalshi 15 min, sin interruptor
-          ni nada más: solo la predicción de la ventana y ¿cobro o salgo? */}
+      {/* v13.3: la pestaña KALSHI es todo Kalshi en una sola: §1 predicción
+          de la ventana 15 min, §2 ¿Cobro o me quedo? (virtual o real),
+          §3 Mis posiciones, §4 Mi cuenta y §5 últimas ventanas. */}
       {activeTab === 'kalshi' && (
         <section className={`card verdict-card kalshi-card verdict-${kalshiVerdict.key === 'up' ? 'buy' : kalshiVerdict.key === 'down' ? 'sell' : 'wait'}`} aria-label="Modo Kalshi 15 minutos">
           <p className="verdict-kicker">MODO KALSHI 15 MIN · {symbol} · VENTANA DE 15 MINUTOS · EDUCATIVO, NO ES RECOMENDACIÓN DE APUESTA</p>
@@ -1402,13 +1404,35 @@ export default function App() {
           </div>
           <p className="muted">Regla simple: si vas ganando y la señal se dio la vuelta, cobra. Si vas perdiendo y la señal va en tu contra, sal. Si la señal sigue a tu favor, aguanta hasta el cierre de la ventana. Todo virtual: nada de esto mueve dinero real ni tu cuenta de Kalshi.</p>
 
-          {/* v12/v13: KALSHI REAL SOLO LECTURA — posiciones de verdad, nunca opera.
-              Aquí, versión compacta: solo las posiciones. Conectar se hace en Mi cuenta. */}
+          {/* v13.3: KALSHI REAL SOLO LECTURA — posiciones de verdad y
+              cuenta, nunca opera. Una sola instancia, en orden: §3 Mis
+              posiciones (§4 Mi cuenta dentro del mismo componente).
+              La posición virtual de arriba (§2) y la real de la tabla
+              usan la misma regla de ¿cobro o salgo? */}
           {user ? (
-            <KalshiConnect compact token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} currentPrice={kalshiPrice} referencePrice={kalshiRefPrice} referenceSource={kalshiRefSource} currency={currency} onGoAccount={() => setActiveTab('cuenta')} />
+            <KalshiConnect token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} currentPrice={kalshiPrice} referencePrice={kalshiRefPrice} referenceSource={kalshiRefSource} currency={currency} user={user} onLogout={handleLogout} />
           ) : (
-            <p className="muted">🔐 Para conectar tu Kalshi, entra o crea tu cuenta (solo lectura: la app nunca opera por ti).</p>
+            <div>
+              <h3>📡 Mis posiciones de Kalshi — solo lectura</h3>
+              <p className="muted">Entra o crea tu cuenta para conectar tu Kalshi y ver tus posiciones reales. La app nunca opera por ti: solo lee tus posiciones, tu saldo y tu historial.</p>
+              <div className="row">
+                <button onClick={() => { setShowAuth('login'); setAuthError(''); }}>Entrar</button>
+                <button onClick={() => { setShowAuth('register'); setAuthError(''); }}>Crear cuenta</button>
+              </div>
+            </div>
           )}
+
+          {/* v13.3: perfil local, antes en la pestaña "Mi cuenta Kalshi".
+              Sigue aquí, dentro de Kalshi, junto a Mi cuenta. */}
+          <div className="profile no-print">
+            <h3>👤 Tu perfil local {nickname ? `— ${nickname}` : ''}</h3>
+            <p className="muted">Sin registro ni contraseña: solo un apodo guardado en este navegador, que se usa en la liga semanal y en la tarjeta para compartir. Nada se envía a ningún servidor.</p>
+            <div className="row">
+              <label>Apodo: <input type="text" maxLength={20} value={nicknameInput} placeholder="Ej.: Luis" onChange={(e) => setNicknameInput(e.target.value)} /></label>
+              <button onClick={saveNickname}>Guardar apodo</button>
+              {profileMsg && <span className="muted">{profileMsg}</span>}
+            </div>
+          </div>
 
           {kalshiHist.length > 0 && (
             <div>
@@ -1675,29 +1699,6 @@ export default function App() {
               </>
       )}
 
-            {activeTab === 'cuenta' && (
-        <>
-      <section className="card">
-        <h2>📡 Mi cuenta Kalshi — solo lectura</h2>
-        {!user ? (
-          <div>
-            <p className="muted">Entra o crea tu cuenta para conectar tu Kalshi y ver tus posiciones reales. La app nunca opera por ti: solo lee tus posiciones, tu saldo y tu historial.</p>
-            <div className="row">
-              <button onClick={() => { setShowAuth('login'); setAuthError(''); }}>Entrar</button>
-              <button onClick={() => { setShowAuth('register'); setAuthError(''); }}>Crear cuenta</button>
-            </div>
-          </div>
-        ) : (
-          <div>
-            <p className="muted">Sesión: <b>{user.name || user.email}</b> ({user.email}){user.role === 'admin' ? ' · administrador' : ''}</p>
-            <KalshiConnect token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} currentPrice={kalshiPrice} referencePrice={kalshiRefPrice} referenceSource={kalshiRefSource} currency={currency} />
-            <div className="row"><button onClick={handleLogout}>Salir de mi cuenta</button></div>
-          </div>
-        )}
-      </section>
-        </>
-      )}
-
       {activeTab === 'cartera' && (
         <>
 {/* Cartera virtual */}
@@ -1868,23 +1869,6 @@ export default function App() {
           ))}
         </div>
       </section>
-
-              </>
-      )}
-
-      {activeTab === 'cuenta' && (
-        <>
-{/* Perfil local: apodo sin cuentas */}
-      <section className="card profile no-print">
-        <h2>👤 Tu perfil local {nickname ? `— ${nickname}` : ''}</h2>
-        <p className="muted">Sin registro ni contraseña: solo un apodo guardado en este navegador, que se usa en la liga semanal y en la tarjeta para compartir. Nada se envía a ningún servidor.</p>
-        <div className="row">
-          <label>Apodo: <input type="text" maxLength={20} value={nicknameInput} placeholder="Ej.: Luis" onChange={(e) => setNicknameInput(e.target.value)} /></label>
-          <button onClick={saveNickname}>Guardar apodo</button>
-          {profileMsg && <span className="muted">{profileMsg}</span>}
-        </div>
-      </section>
-
 
               </>
       )}
