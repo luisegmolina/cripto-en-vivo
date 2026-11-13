@@ -8,6 +8,21 @@
 
 export const ALERT_COOLDOWN_MS = 3600000; // 1 hora
 
+// v13: deduplicación de alertas de CAMBIO DE VEREDICTO.
+// Causa del bug del video (12-nov, 19:48:54): el veredicto se
+// recalcula con cada tick de la vela en curso y con cada refresco
+// de las 4 temporalidades, así que puede cruzar el umbral ±25
+// varias veces en el mismo segundo (ESPERAR y VENDER a la vez).
+// Regla: una sola alerta de cambio de veredicto por minuto; si el
+// veredicto cambia dos veces en menos de 60 s, solo queda la última
+// (se reemplaza, no se añade otra). Función pura, probada en Node.
+export const SIGNAL_ALERT_MIN_MS = 60000;
+export function shouldSignalAlert(last, nowMs = Date.now()) {
+  if (!last || !last.at) return { fire: true, replace: false };
+  if (nowMs - last.at < SIGNAL_ALERT_MIN_MS) return { fire: false, replace: true };
+  return { fire: true, replace: false };
+}
+
 export function alertKey(a) {
   return `${a.symbol}|${a.currency}|${a.direction}|${a.target}`;
 }

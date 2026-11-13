@@ -274,6 +274,53 @@ ofrece un apodo local (sin contraseña, sin servidor).
   local" (sin contraseña, sin servidor), que se usa en la liga semanal
   y en la tarjeta para compartir. Nada se envía a ningún servidor.
 
+## Novedades v13: PESTAÑAS — Kalshi al frente, sin ruido (12-nov-2026)
+
+Luis lo dijo claro: la app tenía muchísimo ruido y lo verdaderamente
+importante son las predicciones de Kalshi. Ahora la app se navega por
+pestañas, siempre visibles arriba: **Kalshi** (por defecto al entrar),
+**Mercados**, **Gráfico y señal**, **Mi cuenta Kalshi**, **Cartera
+virtual**, **Liga y misiones**, y **Admin** (solo si eres admin).
+
+- **Pestaña KALSHI (limpia, sin ruido):** solo el Modo Kalshi 15 min
+  — ventana actual con cuenta atrás, precio de referencia, veredicto
+  gigante SUBE/BAJA/ESPERAR, porqué en simple, ¿Cobro o me quedo?
+  con tu posición (virtual o real si está conectada) y últimas
+  ventanas con acierto/fallo. Sin ticker tape, sin mercados, sin liga
+  ni misiones en esta pestaña. El formulario para conectar Kalshi vive
+  en **Mi cuenta Kalshi**; en la pestaña Kalshi solo se ven las
+  posiciones reales (versión compacta).
+- **Fallos del video del 12-nov, corregidos:**
+  1. **Gráfico en blanco:** el gráfico se creaba una sola vez al
+     montar la app; si el contenedor aún no tenía tamaño o las velas
+     no habían llegado, quedaba vacío y nada lo recreaba. Ahora se
+     crea cada vez que se entra en la pestaña Gráfico (y se destruye
+     al salir), con ResizeObserver, y si no hay velas dice
+     "Cargando velas…" en vez de quedarse en blanco. Al cambiar de
+     intervalo se vacían las velas viejas antes de pintar las nuevas.
+  2. **Posición real de Kalshi vacía:** en el video salía Precio
+     medio 0¢, Cantidad —, Precio actual 0¢ y "SIN POSICIÓN". Causa:
+     en el cliente, `Number(null)` es 0, así que una posición sin
+     precio medio se veía como 0¢. Ahora null es null ("—") y la
+     posición lleva una explicación en claro: cantidad 0 = cerrada o
+     sin cantidad abierta (puede estar liquidada o vencida); sin
+     precio medio = no hay operaciones para calcularlo; sin precio
+     actual = mercado cerrado/vencido o sin cotización.
+  3. **Alertas contradictorias en el mismo segundo:** salieron
+     "ESPERAR (puntuación -14)" y "VENDER (puntuación -34)" a la vez.
+     Causa: el veredicto se recalcula con cada tick y con cada
+     refresco de las 4 temporalidades, y cruzaba el umbral varias
+     veces por segundo. Regla nueva: una sola alerta de cambio de
+     veredicto por minuto; si cambia dos veces en menos de 60 s,
+     solo queda la última (se reemplaza, no se añade otra).
+  4. **Señales 15m fallando:** en las últimas ventanas, 4 de 5
+     señales BAJA fallaron. No se esconde: si en las últimas
+     ventanas la señal 15m acierta menos del 50%, la pestaña Kalshi
+     lo avisa en grande y la confianza estimada se baja (tope 60%).
+  5. El subtítulo ya no dice "(admin /admin)": era un resto de
+     depuración.
+- Nada de v7–v12 se quitó: todo sigue en su pestaña.
+
 ## Novedades v12: Usuarios + Kalshi SOLO LECTURA (12-nov-2026)
 
 La app pública sigue igual y sin registro obligatorio para ver precios

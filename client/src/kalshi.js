@@ -58,6 +58,21 @@ export function estimatedProb(score, agreement = 0) {
   return Math.round(Math.min(85, Math.max(50, p)));
 }
 
+// v13: rendimiento reciente de la señal 15m y ajuste de confianza.
+// Si en las últimas ventanas la señal acierta menos del 50%, no se
+// esconde: se avisa y la confianza estimada se baja (tope 60%).
+// Función pura, probada en Node.
+export function recentWinRate(hist) {
+  if (!hist || hist.length < 3) return null;
+  const wins = hist.filter((h) => h.won).length;
+  return { wins, total: hist.length, rate: wins / hist.length };
+}
+export function adjustProbForRecent(prob, hist) {
+  const r = recentWinRate(hist);
+  if (r && r.rate < 0.5) return Math.min(prob, 60);
+  return prob;
+}
+
 // ¿La señal favorece a la posición? dir 'up' = aposté a que SUBE,
 // 'down' = aposté a que BAJA. signalKey: 'up' | 'down' | 'wait'.
 export function signalFavorsPosition(dir, signalKey) {

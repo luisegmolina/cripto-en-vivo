@@ -1,105 +1,13 @@
-Cripto en Vivo — VERSIÓN v12
-Fecha: 2026-11-12
-- v4 en la interfaz: "Cartera virtual + gráfico en vivo".
-- v5: configuración de despliegue (vercel.json, api/, render.yaml).
-- v6: guía RENDER.md con los pasos exactos para desplegar gratis en
-  Render (Luis crea el repo en GitHub y el servicio en Render).
-- v6 desplegada en Render: https://cripto-en-vivo.onrender.com
-  (verificado: /api/health OK, BTC $73,855.48 vía Coinbase).
-- v7: PANEL DE MERCADO PRO (dominio BTC aprox., miedo y codicia
-  estimado propio, capitalización total aprox., mapa de calor),
-  GRÁFICO PRO (toggles EMA 20/50, Bollinger, RSI en panel inferior,
-  comparar contra BTC, pantalla completa, latencia visible),
-  BACKTEST DE SEÑALES ("acertó X de Y"), LIGA SEMANAL virtual con
-  rivales demo locales, MISIONES DIARIAS y XP con niveles, PWA
-  (manifest + service worker + notificaciones locales, SIN push real),
-  TARJETA PARA COMPARTIR por WhatsApp (texto + imagen PNG con canvas),
-  LIGA PRIVADA CON CÓDIGO (local), SCREENER / OPORTUNIDADES DEL DÍA,
-  PERFIL LOCAL con apodo (sin login, sin servidor).
-- Todo lo nuevo es dinero VIRTUAL y prueba educativa, sin registro
-  obligatorio al entrar. Lo que es demo/local va etiquetado en la app
-  y en el README (sección "Qué es real y qué es demo/local").
-- Probado: build del cliente sin errores; servidor local con curl a
-  /api/health, /api/ticker?symbol=BTC&currency=USD y /api/markets.
-
-- v8 (2026-11-11): LA SEÑAL AL FRENTE. Veredicto gigante COMPRAR /
-  VENDER / ESPERAR con puntuación, fuerza y confianza (confluencia);
-  confluencia 1m/5m/15m/1h con aviso de "señales en conflicto";
-  "¿Por qué?" en lenguaje simple; plan de operación educativo
-  (entrada, stop 1 ATR, take profit 2 ATR, ratio 1:2); historial de
-  señales con acierto/fallo (BTC 1h 6/10, BTC 1m 2/10 medido el 11-nov);
-  alerta cuando el veredicto cambia de COMPRAR a VENDER o viceversa.
-  Página reordenada: veredicto primero, gráfico después, resto después.
-  Nada de v7 se quitó. Todo dinero VIRTUAL, prueba educativa, sin
-  recomendación de inversión ni garantía de ganancias.
-
-- v9 (2026-11-11): CORRECCIONES DEL PDF. (1) Con ESPERAR no hay
-  entrada ni stop ni objetivo: solo "Sin entrada" + niveles de
-  activación a 1 ATR (también se corrigió que tradePlan se llamaba sin
-  el veredicto). (2) Intervalo por defecto 1h (no 1m, que es ruido:
-  BTC 1m 2/10); aviso "1m es ruido, no apto para decidir" al usar 1m.
-  (3) Capitalización total REAL de CoinGecko vía /api/global (caché
-  5 min); si falla, "No disponible", nunca un número inventado; el
-  proxy precio × volumen se eliminó. (4) Alertas: una suena UNA vez y
-  cooldown de 1 h por precio objetivo (alerts.js, probado); no se
-  puede crear la misma alerta dos veces. (5) Debug del servidor
-  detrás de "Detalles técnicos" plegado; solo "Servidor OK" visible.
-  (6) Screener: solo señales claras |score| ≥ 25 son oportunidad;
-  las débiles van a "Sin oportunidad clara", sin número. (7) @media
-  print: una columna, fondo blanco, sin ticker ni gráficos, sin
-  secciones de liga/misiones/logros que se solapaban. Pruebas
-  tests-v9.mjs: 21/21 con datos reales.
-
-- v10 (2026-11-11): CORRECCIONES DE LAS CAPTURAS 20:56. (1) Liga: el
-  span "(demo)" estaba como string en App.jsx y se veía el código en
-  pantalla; ahora es JSX real. (2) Screener: se calcula SOLO al cargar
-  (al llegar las 10 pestañas); el botón queda para refrescar. (3)
-  Migración de alertas al cargar (dedupePriceAlerts): las 4 viejas de
-  $73.53 quedan en 2 (1 por encima + 1 por debajo), la más reciente
-  marcada como sonada. (4) Backtest e historial SIEMPRE en 1h (velas
-  de la confluencia); al entrar el intervalo es 1h en todas partes y
-  el aviso "1m es ruido" solo sale junto al gráfico si se cambia a 1m
-  a mano. (5) /api/global con respaldo CoinPaprika cuando CoinGecko da
-  429 (muy frecuente en Render): capitalización y dominio marcados
-  como aproximados; si no hay fuente, retryInSeconds y la app dice
-  cuándo se reintentará. Pruebas tests-v10.mjs: 26/26 con datos reales
-  (backtest BTC 1h: 10 de 18, 56%).
-
-- v11 (2026-11-12): MODO KALSHI 15 MIN (capa encima, nada de v7-v10 se
-  quita). Interruptor visible arriba; al activarlo el timeframe
-  principal pasa a 15m (al apagarlo vuelve a 1h). Ventana actual de
-  15 min (:00/:15/:30/:45) con cuenta atrás MM:SS, barra de %
-  transcurrido, precio de referencia (apertura de la vela 15m) y
-  movimiento en la ventana. Señal SUBE / BAJA / ESPERAR para los
-  próximos 15 minutos, con puntuación, fuerza, confianza y porqué en
-  simple; probabilidad ESTIMADA propia (NO oficial de Kalshi).
-  Sección "¿Cobro o me quedo?": posición virtual (entrada, dirección,
-  cantidad, solo local) y decisión COBRA AHORA / AGUANTA / SAL ANTES
-  DE PERDER MÁS / AGUANTA CON CUIDADO / ESPERA, con P&L virtual en
-  $ y % y precio sugerido para cobrar/salir. Backtest 15m (BTC 15m:
-  7 de 12, 58% medido el 12-nov) y últimas 5 ventanas con acierto/
-  fallo. Sin API real de Kalshi, sin cuenta, sin dinero real.
-  Pruebas tests-v11.mjs: 34/34 con datos reales del servidor local.
-
-- v12 (2026-11-12): USUARIOS + KALSHI SOLO LECTURA. Registro con email
-  + contraseña (bcrypt) y login JWT (7 días); sin registro obligatorio
-  para ver precios y señales. Panel de administración en /admin (solo
-  rol admin; Luis es el primer admin, creado con ADMIN_EMAIL y
-  ADMIN_PASSWORD en Render): lista de usuarios, quién conectó Kalshi
-  (solo sí/no y última sync), activar/desactivar, resetear contraseña.
-  Nunca muestra contraseñas ni claves privadas. Conectar Kalshi por
-  usuario (SOLO LECTURA): Key ID + clave privada .pem, cifrada con
-  AES-256-GCM (KALSHI_ENCRYPTION_KEY en Render); el servidor solo hace
-  GET a /portfolio/positions, /portfolio/balance y /portfolio/fills;
-  NO existe código de escritura a Kalshi. Conectado, se ven las
-  posiciones reales (ticker, lado sí/no, precio medio ¢, cantidad,
-  precio actual ¢, P&L estimado) y la decisión COBRA/AGUANTA/SAL del
-  modo 15 min aplicada a la posición real. Base de datos Neon Postgres
-  (tablas cev_users, cev_kalshi_connections, cev_user_data; el servidor
-  las crea solas con DATABASE_URL); sin DATABASE_URL, archivo JSON
-  local solo para probar (en Render se perdería al reiniciar).
-  Variables en Render: DATABASE_URL, JWT_SECRET,
-  KALSHI_ENCRYPTION_KEY, ADMIN_EMAIL, ADMIN_PASSWORD (quitarla tras
-  crear el admin). PENDIENTE de Luis: crear la base en Neon y poner
-  las variables en Render (pasos exactos en DEPLOYMENT.md).
-  Pruebas tests-v12.mjs: 37/37 con datos reales del servidor local.
+v13 — Pestañas: Kalshi al frente (12-nov-2026)
+- Navegación por pestañas: KALSHI (por defecto), Mercados, Gráfico y señal,
+  Mi cuenta Kalshi, Cartera virtual, Liga y misiones, Admin (solo admin).
+- Pestaña Kalshi limpia: solo Modo Kalshi 15 min, sin ticker tape ni resto.
+- Gráfico en blanco corregido: se recrea al entrar en su pestaña, con
+  ResizeObserver; "Cargando velas…" si no hay velas.
+- Posición Kalshi vacía explicada: cantidad 0 = cerrada; null ya no se
+  muestra como 0¢.
+- Alertas de veredicto: una por minuto; si cambia dos veces en <60 s,
+  solo queda la última.
+- Señal 15m fallando: aviso honesto + confianza bajada (tope 60%) si
+  acierta menos del 50% en las últimas ventanas.
+- Subtítulo sin "(admin /admin)".

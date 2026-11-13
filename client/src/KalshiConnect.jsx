@@ -33,7 +33,14 @@ function fmtUsd(n) {
   return new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 }
 
-export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, currentPrice, currency }) {
+// v13: Number(null) es 0, y por eso en el video una posición sin
+// precio medio se veía como "0¢". Aquí null sigue siendo null.
+function numOrNull(v) {
+  if (v == null || v === '' || Number.isNaN(Number(v))) return null;
+  return Number(v);
+}
+
+export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, currentPrice, currency, compact = false, onGoAccount = null }) {
   const [status, setStatus] = useState(null); // {connected, keyIdPreview, lastSyncAt, status}
   const [positionsData, setPositionsData] = useState(null); // {connected, balance, positions, fetchedAt, source}
   const [loading, setLoading] = useState(true);
@@ -145,7 +152,7 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
         </div>
       )}
 
-      {!connected && !loading && (
+      {!connected && !loading && !compact && (
         <form onSubmit={doConnect}>
           <div className="row">
             <label>Kalshi API Key ID: <input type="text" value={keyId} autoComplete="off" placeholder="Ej.: 12345678-…" onChange={(e) => setKeyId(e.target.value)} /></label>
@@ -162,6 +169,10 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
           </div>
           <p className="muted">Tu clave privada se envía cifrada al servidor y nunca se muestra completa: después de conectar solo verás el Key ID. No se guarda en este navegador.</p>
         </form>
+      )}
+
+      {!connected && !loading && compact && (
+        <p className="muted">🔐 Kalshi no conectado. <button onClick={() => onGoAccount && onGoAccount()}>Conectar Kalshi en Mi cuenta</button></p>
       )}
 
       {connected && (
@@ -186,25 +197,28 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
                 <thead><tr><th>Mercado</th><th>Lado</th><th>Precio medio</th><th>Cantidad</th><th>Precio actual</th><th>P&amp;L estimado</th><th>¿Cobro o salgo?</th></tr></thead>
                 <tbody>
                   {positions.map((pos, i) => {
-                    const avg = Number(pos.avgPrice);
-                    const cur = Number(pos.currentPrice);
-                    const count = Number(pos.count) || 0;
+                    // v13: null es null, no 0. Un precio medio sin dato
+                    // se muestra como "—", no como "0¢" (ese era el bug
+                    // del video: Number(null) === 0).
+                    const avg = numOrNull(pos.avgPrice);
+                    const cur = numOrNull(pos.currentPrice);
+                    const count = numOrNull(pos.count) || 0;
                     // P&L estimado en $: (precio actual − precio medio) en centavos × cantidad / 100.
                     // currentPrice es el precio del lado que tienes (sí/no), igual que avgPrice.
                     const pnl = (Number.isFinite(avg) && Number.isFinite(cur) && count > 0)
                       ? ((cur - avg) / 100) * count : null;
                     const dir = deriveDir(pos);
-                    const amountUsd = (Number.isFinite(avg) && count > 0) ? (count * avg) / 100 : count;
+                    const amountUsd = (Number.isFinite(avg) && count > 0) ? (count * avg) / 100 : 0;
                     const decision = dir && Number.isFinite(avg) && Number.isFinite(cur)
                       ? cashOutDecision({ dir, entryPrice: avg, currentPrice: cur, amount: amountUsd, signalKey: kalshiVerdictKey, signalScore: kalshiScore })
                       : null;
                     return (
                       <tr key={`${pos.ticker || ''}-${i}`}>
-                        <td><b>{pos.ticker || '—'}</b><br /><span className="muted">{pos.marketTitle || pos.title || ''}</span></td>
+                        <td><b>{pos.ticker || '—'}</b><br /><span className="muted">{pos.marketTitle || pos.title || ''}</span>{pos.note && (<><br /><span className="muted">⚠️ {pos.note}</span></>)}{pos.status && (<><br /><span className="muted">Estado del mercado: {pos.status}</span></>)}</td>
                         <td>{pos.side === 'yes' ? 'SÍ' : pos.side === 'no' ? 'NO' : (pos.side || '—')}</td>
-                        <td>{Number.isFinite(avg) ? `${avg}¢` : '—'}</td>
-                        <td>{count || '—'}</td>
-                        <td>{Number.isFinite(cur) ? `${cur}¢` : '—'}</td>
+                        <td>{avg != null ? `${avg}¢` : '—'}</td>
+                        <td>{count > 0 ? count : '0 (cerrada)'}</td>
+                        <td>{cur != null ? `${cur}¢` : '—'}</td>
                         <td className={pnl == null ? '' : pnl >= 0 ? 'up' : 'down'}>{pnl == null ? '—' : `${pnl >= 0 ? '+' : ''}${fmtUsd(pnl)}`}</td>
                         <td>
                           {decision ? (

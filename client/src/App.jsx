@@ -5,10 +5,10 @@ import { updateLastCandle, candlesSignature, mergeServerCandles } from './liveCa
 import { fearGreedEstimate, heatToday, isoWeekKey, rivalsForWeek } from './marketPro.js';
 import { backtestSignal } from './backtest.js';
 import { multiTfVerdict, reasonsFor, tradePlan, signalHistory, atr, VERDICT_TFS } from './verdict.js';
-import { KALSHI_WINDOW_MS, window15m, fmtClock, fmtCountdown, kalshiVerdictForScore, strengthForScore, estimatedProb, cashOutDecision, suggestedExitPrice } from './kalshi.js';
+import { KALSHI_WINDOW_MS, window15m, fmtClock, fmtCountdown, kalshiVerdictForScore, strengthForScore, estimatedProb, adjustProbForRecent, recentWinRate, cashOutDecision, suggestedExitPrice } from './kalshi.js';
 import { MISSIONS, levelForXp, xpIntoLevel, XP_PER_LEVEL } from './missions.js';
 import { screenOpportunities } from './screener.js';
-import { shouldFireAlert, ALERT_COOLDOWN_MS, dedupePriceAlerts } from './alerts.js';
+import { shouldFireAlert, shouldSignalAlert, ALERT_COOLDOWN_MS, dedupePriceAlerts } from './alerts.js';
 import { shareText, whatsappUrl, drawShareCard, APP_URL } from './shareCard.js';
 import { getToken, register, login, me, logout, apiAuth } from './auth.js';
 import AdminPanel from './AdminPanel.jsx';
@@ -24,7 +24,7 @@ const ASSETS = [
 const INTERVALS = ['1m', '5m', '15m', '1h', '6h', '1d'];
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v12 — Usuarios + Kalshi solo lectura (admin /admin)';
+const VERSION_LABEL = 'v13 — Predicciones Kalshi al frente';
 
 const ACHIEVEMENTS = [
   { id: 'primera_operacion', name: 'Primera operación virtual', desc: 'Compra o vende por primera vez con dinero virtual.' },
@@ -125,24 +125,35 @@ export default function App() {
   // selección entre sesiones: si en la sesión anterior se quedó en
   // 1m (o quedó guardado un '1m' viejo), al cargar se vuelve a 1h.
   // El aviso "1m es ruido" solo sale si el usuario cambia a 1m a mano.
-  const [candleInterval, setCandleInterval] = useState('1h');
-  useEffect(() => { setCandleInterval('1h'); }, []);
+  const [candleInterval, setCandleInterval] = useState('15m');
 
-  // --- v11: MODO KALSHI 15 MIN (capa encima, no reemplaza nada) ---
-  // Kalshi = predicciones por ventanas de 15 minutos: en ese tiempo
-  // hay que decidir si cobrar lo ganado o salir. Sin conexión a la
-  // cuenta de Kalshi, sin dinero real, sin probabilidades oficiales:
-  // todo virtual y educativo, solo en este navegador.
-  const [kalshiMode, setKalshiMode] = useState(() => loadLS('cev_kalshi_mode_v1', false));
+  // --- v13: PESTAÑAS. La pestaña KALSHI es la principal y la única
+  // sin ruido: solo las predicciones de Kalshi 15 min. Lo demás vive
+  // en su pestaña (Mercados, Gráfico, Mi cuenta, Cartera, Liga,
+  // Admin). Kalshi = predicciones por ventanas de 15 minutos: en ese
+  // tiempo hay que decidir si cobrar lo ganado o salir. Sin conexión
+  // a la cuenta de Kalshi, sin dinero real, sin probabilidades
+  // oficiales: todo virtual y educativo, solo en este navegador.
+  const [activeTab, setActiveTab] = useState('kalshi');
+  const TABS = [
+    { id: 'kalshi', label: '⏱️ Kalshi' },
+    { id: 'mercados', label: '📊 Mercados' },
+    { id: 'grafico', label: '📈 Gráfico y señal' },
+    { id: 'cuenta', label: '📡 Mi cuenta Kalshi' },
+    { id: 'cartera', label: '💰 Cartera virtual' },
+    { id: 'liga', label: '🏆 Liga y misiones' },
+  ];
+  // Al entrar en Kalshi el timeframe es 15m; al entrar en Gráfico
+  // vuelve a 1h (el intervalo para decidir en general).
+  useEffect(() => {
+    if (activeTab === 'kalshi') setCandleInterval('15m');
+    else if (activeTab === 'grafico') setCandleInterval('1h');
+  }, [activeTab]);
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
-  useEffect(() => { saveLS('cev_kalshi_mode_v1', kalshiMode); }, [kalshiMode]);
-  // Al activar el modo, el timeframe principal pasa a 15m; al
-  // apagarlo, vuelve a 1h (el intervalo para decidir en general).
-  useEffect(() => { setCandleInterval(kalshiMode ? '15m' : '1h'); }, [kalshiMode]);
   const [kalshiPos, setKalshiPos] = useState(() => loadLS('cev_kalshi_position_v1', { entryPrice: '', dir: 'up', amount: '100', entryScore: null }));
   const [kalshiEntryPrice, setKalshiEntryPrice] = useState(kalshiPos.entryPrice || '');
   const [kalshiDir, setKalshiDir] = useState(kalshiPos.dir || 'up');
@@ -264,6 +275,9 @@ export default function App() {
   const lastChartTime = useRef(null);
   const chartRef = useRef(null);
   const chartObj = useRef(null);
+  // v13: contador que sube cada vez que se (re)crea el gráfico; el
+  // efecto de datos lo usa para repintar aunque las velas no cambien.
+  const [chartReady, setChartReady] = useState(0);
   const candleSeries = useRef(null);
   const volumeSeries = useRef(null);
   const ema20Series = useRef(null);
@@ -470,6 +484,11 @@ export default function App() {
   const kalshiAtr = useMemo(() => atr(candles15m), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const kalshiBacktest = useMemo(() => backtestSignal(candles15m), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const kalshiHist = useMemo(() => signalHistory(candles15m, 5), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // v13: si en las últimas ventanas la señal 15m acierta menos del
+  // 50%, no se esconde: se avisa en la pestaña Kalshi y la confianza
+  // estimada se baja (tope 60%).
+  const kalshiRecent = recentWinRate(kalshiHist);
+  const kalshiProbAdj = adjustProbForRecent(kalshiProb, kalshiHist);
   const kalshiEntryNum = Number(kalshiEntryPrice);
   const kalshiAmountNum = Number(kalshiAmount);
   const kalshiDecision = useMemo(() => cashOutDecision({
@@ -619,6 +638,7 @@ export default function App() {
     lastChartSig.current = '';
     lastChartTime.current = null;
     prevPrice.current = null;
+    setCandles([]);
     setBtcCandles([]);
   }, [symbol, currency, candleInterval]);
 
@@ -686,8 +706,14 @@ export default function App() {
     if (fired) setPriceAlerts(next);
   }, [ticker, symbol, currency]);
 
-  // --- v8: ALERTA cuando el VEREDICTO cambia de COMPRAR a VENDER o viceversa ---
-  const prevVerdictKey = useRef(null);
+  // --- v8/v13: ALERTA cuando el VEREDICTO cambia ---
+  // v13: el veredicto se recalcula con cada tick de la vela en curso
+  // y con cada refresco de las 4 temporalidades, así que puede cruzar
+  // el umbral varias veces en el mismo segundo (en el video del 12-nov
+  // salieron ESPERAR y VENDER a la vez, a las 19:48:54). Regla: una
+  // sola alerta de cambio de veredicto por minuto; si cambia dos veces
+  // en menos de 60 s, solo queda la última (se reemplaza, no se añade
+  // otra, y no vuelve a sonar).
   const verdictKeyNow = mtfVerdict.verdict.key;
   useEffect(() => {
     const prev = prevVerdictKey.current;
@@ -698,6 +724,21 @@ export default function App() {
     const msg = flips
       ? `🚨 CAMBIO DE SEÑAL ${symbol}: ${prev === 'buy' ? 'COMPRAR' : 'VENDER'} → ${verdictKeyNow === 'buy' ? 'COMPRAR' : 'VENDER'} (puntuación ${mtfVerdict.score}, confianza ${mtfVerdict.confidence}%) — ${new Date().toLocaleTimeString('es-US')}`
       : `🔔 Señal ${symbol}: ahora ${mtfVerdict.verdict.label} (puntuación ${mtfVerdict.score}) — ${new Date().toLocaleTimeString('es-US')}`;
+    const nowMs = Date.now();
+    const chk = shouldSignalAlert(lastSignalAlertRef.current, nowMs);
+    lastSignalAlertRef.current = { at: nowMs, key: verdictKeyNow };
+    if (!chk.fire && chk.replace) {
+      // Dentro del mismo minuto: reemplazar la alerta anterior por
+      // esta última, sin añadir otra ni volver a notificar.
+      setAlerts((a) => {
+        const idx = a.findIndex((x) => x.includes('Señal') || x.includes('CAMBIO DE SEÑAL'));
+        if (idx < 0) return [msg, ...a].slice(0, 20);
+        const copy = [...a];
+        copy[idx] = msg;
+        return copy;
+      });
+      return;
+    }
     setAlerts((a) => [msg, ...a].slice(0, 20));
     notify('Cripto en Vivo — cambio de señal', msg);
     try {
@@ -708,8 +749,15 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [verdictKeyNow, symbol]);
 
-  // --- Gráfico de velas: creación (una sola vez, con limpieza) ---
+  // --- Gráfico de velas: creación al entrar en la pestaña Gráfico ---
+  // v13: antes se creaba UNA sola vez al montar la app; si el
+  // contenedor aún no tenía tamaño o las velas no habían llegado, el
+  // gráfico quedaba en blanco y nada lo recreaba (eso se ve en el
+  // video del 12-nov). Ahora se crea cada vez que se entra en la
+  // pestaña Gráfico y se destruye al salir; chartReady obliga al
+  // efecto de datos a repintar con las velas que ya hay.
   useEffect(() => {
+    if (activeTab !== 'grafico') return undefined;
     const el = chartRef.current;
     if (!el) return undefined;
     const chart = createChart(el, {
@@ -728,10 +776,21 @@ export default function App() {
     bbLowerSeries.current = chart.addLineSeries({ color: 'rgba(148,163,184,.7)', lineWidth: 1, title: 'Bollinger inf.', priceLineVisible: false, lastValueVisible: false });
     relSeries.current = chart.addLineSeries({ color: '#a78bfa', lineWidth: 2, title: 'vs BTC (índice 100)', priceScaleId: 'rel', priceLineVisible: false });
     try { chart.priceScale('rel').applyOptions({ visible: false }); } catch {}
-    const onResize = () => chart.applyOptions({ width: el.clientWidth });
+    const onResize = () => { try { chart.applyOptions({ width: el.clientWidth }); } catch {} };
     window.addEventListener('resize', onResize);
+    let ro = null;
+    try {
+      ro = new ResizeObserver(() => { try { chart.applyOptions({ width: el.clientWidth }); } catch {} });
+      ro.observe(el);
+    } catch {}
+    // El gráfico ya existe: avisar al efecto de datos para que pinte
+    // las velas que ya llegaron (si no, se quedaría en blanco hasta
+    // que llegara una vela nueva).
+    lastChartSig.current = '';
+    setChartReady((n) => n + 1);
     return () => {
       window.removeEventListener('resize', onResize);
+      try { ro && ro.disconnect(); } catch {}
       chart.remove();
       chartObj.current = null;
       candleSeries.current = null;
@@ -744,7 +803,7 @@ export default function App() {
       relSeries.current = null;
       lastChartSig.current = '';
     };
-  }, []);
+  }, [activeTab]);
 
   // Pantalla completa del gráfico: redimensionar al entrar/salir.
   useEffect(() => {
@@ -756,7 +815,14 @@ export default function App() {
 
   // --- Gráfico de velas: datos (solo cuando cambia la firma de las velas) ---
   useEffect(() => {
+    if (activeTab !== 'grafico') return;
     if (!candleSeries.current || !volumeSeries.current || !chartObj.current) return;
+    if (!candles.length) {
+      // Sin velas no se pinta nada: vaciar las series para no dejar
+      // velas viejas de otro intervalo y que la UI diga "Cargando…".
+      try { candleSeries.current.setData([]); volumeSeries.current.setData([]); } catch {}
+      return;
+    }
     const closes = candles.map((c) => c.close);
     const times = candles.map((c) => c.time);
     const sig = `${candlesSignature(candles)}|${analysis.patterns.map((p) => `${p.time}:${p.name}`).join(',')}|ema:${showEma}|boll:${showBoll}|rsi:${showRsi}|vsbtc:${compareBtc}|btc:${btcCandles.length ? btcCandles[btcCandles.length - 1].time : 0}`;
@@ -840,7 +906,7 @@ export default function App() {
       lastChartTime.current = lastTime;
       chartObj.current.timeScale().scrollToRealTime();
     }
-  }, [candles, analysis, showEma, showBoll, showRsi, compareBtc, btcCandles]);
+  }, [candles, analysis, showEma, showBoll, showRsi, compareBtc, btcCandles, chartReady, activeTab]);
 
   const testServer = async () => {
     setTestResult('Probando…');
@@ -1126,7 +1192,7 @@ export default function App() {
   return (
     <div className="app">
       {/* Ticker tape superior: los 10 precios en vivo, en movimiento */}
-      <div className="tape" aria-label="Precios en vivo">
+      {activeTab !== 'kalshi' && (<div className="tape" aria-label="Precios en vivo">
         <div className="tape-track">
           {[0, 1].map((dup) => (
             <span key={dup} className="tape-group">
@@ -1139,7 +1205,7 @@ export default function App() {
             </span>
           ))}
         </div>
-      </div>
+      </div>)}
 
       <header>
         <div><h1>₿ Cripto en Vivo</h1><p>Precios reales desde el servidor · React + Node · {VERSION_LABEL}</p></div>
@@ -1159,6 +1225,16 @@ export default function App() {
           )}
         </div>
       </header>
+      {/* v13: PESTAÑAS — Kalshi al frente, lo demás aparte */}
+      <nav className="app-tabs" aria-label="Secciones de la app">
+        {TABS.map((t) => (
+          <button key={t.id} className={activeTab === t.id ? 'on' : ''} onClick={() => setActiveTab(t.id)}>{t.label}</button>
+        ))}
+        {user && user.role === 'admin' && (
+          <button onClick={goAdmin}>🛡️ Admin</button>
+        )}
+      </nav>
+
 
       {/* v12: modal de entrar / crear cuenta (sin registro obligatorio para ver precios y señales) */}
       {showAuth && (
@@ -1192,7 +1268,9 @@ export default function App() {
 
       {error && <div className="error">No se pudo cargar desde el servidor: {error}. Revisa que el servidor esté corriendo (npm run dev en la carpeta raíz).</div>}
 
-      <section className="card">
+      {activeTab === 'mercados' && (
+        <>
+<section className="card">
         <h2>Mercados</h2>
         <p className="muted">Toca un activo para ver su gráfico y su señal. El mini gráfico es el precio de los últimos minutos en vivo.</p>
         <div className="cur">
@@ -1213,15 +1291,12 @@ export default function App() {
         </div>
       </section>
 
-      {/* v11: MODO KALSHI 15 MIN — interruptor visible, capa encima del resto */}
-      <div className="row kalshi-toggle-row">
-        <button className={kalshiMode ? 'on' : ''} onClick={() => setKalshiMode((v) => !v)}>
-          {kalshiMode ? '⏱️ Modo Kalshi 15 min: ACTIVADO' : '⏱️ Activar Modo Kalshi 15 min'}
-        </button>
-        <span className="muted">Predicciones por ventanas de 15 minutos: SUBE o BAJA en la ventana, y ¿cobro o salgo? Dinero virtual, educativo, sin cuenta de Kalshi.</span>
-      </div>
+              </>
+      )}
 
-      {kalshiMode && (
+      {/* v13: la pestaña KALSHI es el Modo Kalshi 15 min, sin interruptor
+          ni nada más: solo la predicción de la ventana y ¿cobro o salgo? */}
+      {activeTab === 'kalshi' && (
         <section className={`card verdict-card kalshi-card verdict-${kalshiVerdict.key === 'up' ? 'buy' : kalshiVerdict.key === 'down' ? 'sell' : 'wait'}`} aria-label="Modo Kalshi 15 minutos">
           <p className="verdict-kicker">MODO KALSHI 15 MIN · {symbol} · VENTANA DE 15 MINUTOS · EDUCATIVO, NO ES RECOMENDACIÓN DE APUESTA</p>
           <div className="stats">
@@ -1238,10 +1313,13 @@ export default function App() {
             <div className="verdict-meta">
               <span>Puntuación 15m: <b>{kalshiScore}</b> / −100 a +100</span>
               <span>Fuerza: <b>{strengthForScore(kalshiScore)}</b></span>
-              <span>Confianza (confluencia): <b>{kalshiProb}% estimado*</b></span>
+              <span>Confianza (confluencia): <b>{kalshiProbAdj}% estimado*</b></span>
             </div>
           </div>
           <p className="muted">* Probabilidad ESTIMADA propia a partir de la señal (puntuación + timeframes que coinciden). NO es la probabilidad oficial de Kalshi. Una señal que acertó ~56% en 1h puede fallar en 15 minutos.</p>
+          {kalshiRecent && kalshiRecent.rate < 0.5 && (
+            <p className="warn">⚠️ Últimas {kalshiRecent.total} ventanas de 15 min: la señal solo acertó {kalshiRecent.wins} ({Math.round(kalshiRecent.rate * 100)}%). Está fallando últimamente: la confianza se bajó a {kalshiProbAdj}% y no conviene apostar fuerte por ella.</p>
+          )}
           {kalshiReasons.length > 0 && (
             <ul className="reasons">
               {kalshiReasons.map((r, i) => (
@@ -1278,9 +1356,10 @@ export default function App() {
           </div>
           <p className="muted">Regla simple: si vas ganando y la señal se dio la vuelta, cobra. Si vas perdiendo y la señal va en tu contra, sal. Si la señal sigue a tu favor, aguanta hasta el cierre de la ventana. Todo virtual: nada de esto mueve dinero real ni tu cuenta de Kalshi.</p>
 
-          {/* v12: KALSHI REAL SOLO LECTURA — posiciones de verdad, nunca opera */}
+          {/* v12/v13: KALSHI REAL SOLO LECTURA — posiciones de verdad, nunca opera.
+              Aquí, versión compacta: solo las posiciones. Conectar se hace en Mi cuenta. */}
           {user ? (
-            <KalshiConnect token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} currentPrice={kalshiPrice} currency={currency} />
+            <KalshiConnect compact token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} currentPrice={kalshiPrice} currency={currency} onGoAccount={() => setActiveTab('cuenta')} />
           ) : (
             <p className="muted">🔐 Para conectar tu Kalshi, entra o crea tu cuenta (solo lectura: la app nunca opera por ti).</p>
           )}
@@ -1307,7 +1386,9 @@ export default function App() {
         </section>
       )}
 
-      {/* v8: VEREDICTO — lo primero que ve el usuario: ¿compro o vendo? */}
+      {activeTab === 'grafico' && (
+        <>
+{/* v8: VEREDICTO — lo primero que ve el usuario: ¿compro o vendo? */}
       <section className={`card verdict-card verdict-${mtfVerdict.verdict.key} ${mtfVerdict.conflict ? 'verdict-conflict' : ''}`} aria-label="Veredicto de trading">
         <p className="verdict-kicker">SEÑAL PARA {symbol} · CONFLUENCIA 1m / 5m / 15m / 1h · EDUCATIVO, NO ES RECOMENDACIÓN</p>
         <div className="verdict-main">
@@ -1381,7 +1462,12 @@ export default function App() {
         <p className="muted">La temporalidad de 1h pesa más que la de 1m en el veredicto final. Si se contradicen, el veredicto es ESPERAR.</p>
       </section>
 
-      {/* v8: HISTORIAL DE SEÑALES — ¿sirvió la señal? */}
+              </>
+      )}
+
+      {activeTab === 'grafico' && (
+        <>
+{/* v8: HISTORIAL DE SEÑALES — ¿sirvió la señal? */}
       <section className="card">
         <h2>📜 Historial de señales — {symbol} (1h)</h2>
         <p className="muted">Las últimas señales claras y lo que pasó en la vela siguiente. Si la señal decía COMPRAR y el precio subió, cuenta como acierto. El pasado no predice el futuro. Siempre en 1h, el intervalo para decidir.</p>
@@ -1405,7 +1491,12 @@ export default function App() {
         )}
       </section>
 
-      <section className={`card ${chartFull ? 'chart-full' : ''}`}>
+              </>
+      )}
+
+      {activeTab === 'grafico' && (
+        <>
+<section className={`card ${chartFull ? 'chart-full' : ''}`}>
         <div className="row"><h2>Precio actual · {symbol}-{currency}</h2>
           <span className={flash === 'up' ? 'flash up' : flash === 'down' ? 'flash down' : 'flash'}>{change24 != null ? `${change24 >= 0 ? '▲' : '▼'} ${change24.toFixed(2)}% 24h` : 'Esperando datos…'}</span>
           <button onClick={() => setChartFull((f) => !f)}>{chartFull ? '⤢ Salir de pantalla completa' : '⛶ Pantalla completa'}</button>
@@ -1428,11 +1519,19 @@ export default function App() {
           <button className={compareBtc ? 'on' : ''} onClick={() => setCompareBtc((v) => !v)} disabled={symbol === 'BTC'}>Comparar vs BTC {compareBtc ? '✓' : ''}</button>
         </div>
         <div ref={chartRef} className="chart" />
+        {candles.length === 0 && (
+          <p className="muted">{candlesError ? `Sin velas: ${candlesError}` : 'Cargando velas…'}</p>
+        )}
         {showRsi && <div ref={rsiChartRef} className="chart rsi-chart" />}
         <p className="muted">Actualización: precio cada 1 s, última vela se mueve con cada tick, velas completas cada 6 s, desde el servidor (Coinbase → Kraken → Binance US → CoinGecko). Latencia del último fetch: {latencyMs != null ? `${latencyMs} ms` : '—'}. {compareBtc && symbol !== 'BTC' ? 'La línea morada es el índice relativo vs BTC (100 = igual que al inicio del gráfico; sube si el activo rinde mejor que BTC).' : ''}</p>
       </section>
 
-      <section className="card">
+              </>
+      )}
+
+      {activeTab === 'grafico' && (
+        <>
+<section className="card">
         <h2>Análisis en vivo · Prueba educativa</h2>
         <p className="warn">⚠️ Esto es solo una prueba educativa. Ningún patrón ni indicador predice el precio. NO es una recomendación de inversión.</p>
         <div className={`signal ${analysis.label === 'Posible subida' ? 'signal-up' : analysis.label === 'Posible bajada' ? 'signal-down' : ''}`} style={{ borderColor: sigColor }}>
@@ -1458,7 +1557,12 @@ export default function App() {
         {alerts.length > 0 && <ul className="alerts">{alerts.map((a, i) => <li key={i}>🔔 {a}</li>)}</ul>}
       </section>
 
-      {/* Backtest de señales */}
+              </>
+      )}
+
+      {activeTab === 'grafico' && (
+        <>
+{/* Backtest de señales */}
       <section className="card">
         <h2>🧪 Backtest de señales — {symbol} (1h)</h2>
         <p className="warn">⚠️ Prueba educativa sobre velas pasadas. Que una señal acertara antes NO significa que acierte mañana. Sin promesas. Siempre en 1h, el intervalo para decidir.</p>
@@ -1477,7 +1581,12 @@ export default function App() {
         )}
       </section>
 
-      {/* Screener / Oportunidades del día */}
+              </>
+      )}
+
+      {activeTab === 'mercados' && (
+        <>
+{/* Screener / Oportunidades del día */}
       <section className="card">
         <h2>🔍 Oportunidades del día</h2>
         <p className="muted">Solo cuentan como oportunidad las señales CLARAS (puntuación ≥ 25 de compra o ≤ −25 de venta, velas de 1h). Las débiles van abajo como "sin oportunidad clara", sin número. Toca "Actualizar" para calcularlo con datos frescos.</p>
@@ -1517,7 +1626,35 @@ export default function App() {
         {screenRows.opportunities.length === 0 && screenRows.rest.length === 0 && !screenLoading && <p className="muted">Calculando el screener con las velas de 1h… Si tarda, pulsa "Actualizar screener".</p>}
       </section>
 
-      {/* Cartera virtual */}
+              </>
+      )}
+
+            {activeTab === 'cuenta' && (
+        <>
+      <section className="card">
+        <h2>📡 Mi cuenta Kalshi — solo lectura</h2>
+        {!user ? (
+          <div>
+            <p className="muted">Entra o crea tu cuenta para conectar tu Kalshi y ver tus posiciones reales. La app nunca opera por ti: solo lee tus posiciones, tu saldo y tu historial.</p>
+            <div className="row">
+              <button onClick={() => { setShowAuth('login'); setAuthError(''); }}>Entrar</button>
+              <button onClick={() => { setShowAuth('register'); setAuthError(''); }}>Crear cuenta</button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <p className="muted">Sesión: <b>{user.name || user.email}</b> ({user.email}){user.role === 'admin' ? ' · administrador' : ''}</p>
+            <KalshiConnect token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} currentPrice={kalshiPrice} currency={currency} />
+            <div className="row"><button onClick={handleLogout}>Salir de mi cuenta</button></div>
+          </div>
+        )}
+      </section>
+        </>
+      )}
+
+      {activeTab === 'cartera' && (
+        <>
+{/* Cartera virtual */}
       <section className="card">
         <h2>💰 Cartera virtual — dinero de mentira</h2>
         <p className="warn">⚠️ Esto es un juego con $10.000 virtuales. NO es dinero real, no se conecta a ningún exchange y no se puede retirar nada.</p>
@@ -1552,7 +1689,12 @@ export default function App() {
         )}
       </section>
 
-      {/* Liga semanal (demo/local) */}
+              </>
+      )}
+
+      {activeTab === 'liga' && (
+        <>
+{/* Liga semanal (demo/local) */}
       <section className="card no-print">
         <h2>🏆 Liga semanal — {weekKey}</h2>
         <p className="warn">⚠️ Liga DEMO y local: tus rivales son jugadores simulados de ejemplo (no personas reales ni cuentas) y tu puesto vive solo en este navegador. Todos empiezan el lunes con $10.000 virtuales; la liga se reinicia cada lunes.</p>
@@ -1574,7 +1716,12 @@ export default function App() {
         </table>
       </section>
 
-      {/* Liga privada con código */}
+              </>
+      )}
+
+      {activeTab === 'liga' && (
+        <>
+{/* Liga privada con código */}
       <section className="card no-print">
         <h2>🔐 Liga privada con código</h2>
         <p className="muted">Crea una liga con un código y compártelo con tus amigos, o únete con un código que te den. Es local/demo: la liga y sus miembros solo existen en este navegador; no hay cuentas ni servidor de ligas.</p>
@@ -1594,7 +1741,12 @@ export default function App() {
         {leagueMsg && <p className="muted">{leagueMsg}</p>}
       </section>
 
-      {/* Misiones diarias y XP */}
+              </>
+      )}
+
+      {activeTab === 'liga' && (
+        <>
+{/* Misiones diarias y XP */}
       <section className="card no-print">
         <h2>🎯 Misiones diarias y XP — Nivel {level}</h2>
         <p className="muted">XP total: <b>{xpTotal}</b> · Nivel {level} · {xpInLevel}/{XP_PER_LEVEL} XP para el nivel {level + 1} · Hoy llevas {missionsDoneToday} de {MISSIONS.length} misiones.</p>
@@ -1608,7 +1760,12 @@ export default function App() {
         </div>
       </section>
 
-      {/* Compartir por WhatsApp */}
+              </>
+      )}
+
+      {activeTab === 'liga' && (
+        <>
+{/* Compartir por WhatsApp */}
       <section className="card no-print">
         <h2>📣 Compartir mi semana por WhatsApp</h2>
         <p className="muted">Comparte tu P&L virtual de la semana, tu puesto en la liga y tu mejor operación. Solo se comparte lo que tú pulses; nada sale solo de tu navegador.</p>
@@ -1621,7 +1778,12 @@ export default function App() {
         <canvas ref={shareCanvasRef} style={{ display: 'none' }} aria-hidden="true" />
       </section>
 
-      {/* Alertas de precio */}
+              </>
+      )}
+
+      {activeTab === 'cartera' && (
+        <>
+{/* Alertas de precio */}
       <section className="card">
         <h2>🔔 Alertas de precio</h2>
         <p className="muted">Te aviso en pantalla (y con notificación si la activaste) cuando {symbol} cruce tu precio objetivo.</p>
@@ -1643,7 +1805,12 @@ export default function App() {
         )}
       </section>
 
-      {/* Logros */}
+              </>
+      )}
+
+      {activeTab === 'liga' && (
+        <>
+{/* Logros */}
       <section className="card no-print">
         <h2>🏆 Logros y racha</h2>
         <p className="muted">Todo queda solo en tu navegador. Racha actual: <b>{streak.days} día{streak.days === 1 ? '' : 's'}</b>.</p>
@@ -1656,7 +1823,12 @@ export default function App() {
         </div>
       </section>
 
-      {/* Perfil local: apodo sin cuentas */}
+              </>
+      )}
+
+      {activeTab === 'cuenta' && (
+        <>
+{/* Perfil local: apodo sin cuentas */}
       <section className="card profile no-print">
         <h2>👤 Tu perfil local {nickname ? `— ${nickname}` : ''}</h2>
         <p className="muted">Sin registro ni contraseña: solo un apodo guardado en este navegador, que se usa en la liga semanal y en la tarjeta para compartir. Nada se envía a ningún servidor.</p>
@@ -1668,7 +1840,12 @@ export default function App() {
       </section>
 
 
-      {/* Panel de mercado PRO */}
+              </>
+      )}
+
+      {activeTab === 'mercados' && (
+        <>
+{/* Panel de mercado PRO */}
       <section className="card">
         <h2>📊 Panel de mercado PRO</h2>
         <div className="stats">
@@ -1695,7 +1872,12 @@ export default function App() {
       </section>
 
 
-      {/* Racha + ánimo del mercado */}
+              </>
+      )}
+
+      {activeTab === 'mercados' && (
+        <>
+{/* Racha + ánimo del mercado */}
       <section className="card mood">
         <div className="mood-row">
           <div><span className="muted">Racha abriendo la app</span><b className="streak">🔥 {streak.days} día{streak.days === 1 ? '' : 's'} · {streak.totalDays} días en total</b></div>
@@ -1711,7 +1893,12 @@ export default function App() {
       </section>
 
 
-      <section className="card status">
+              </>
+      )}
+
+      {activeTab === 'mercados' && (
+        <>
+<section className="card status">
         <h2>Estado del servidor</h2>
         <div className="stats">
           <div><span>Servidor</span><b className={serverStatus.startsWith('OK') ? 'up' : serverStatus.startsWith('FALLO') ? 'down' : ''}>{serverStatus}</b></div>
@@ -1735,6 +1922,9 @@ export default function App() {
         )}
       </section>
 
+
+              </>
+      )}
 
       <footer>Fuente de datos: APIs públicas de Coinbase, Kraken, Binance US y CoinGecko, consultadas por el servidor. Precios en vivo, no inventados. El simulador, la liga, las misiones y las alertas usan dinero virtual y son solo una prueba educativa. {APP_URL}</footer>
     </div>

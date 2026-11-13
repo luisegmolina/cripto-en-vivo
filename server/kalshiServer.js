@@ -96,6 +96,21 @@ async function marketPrice(ticker) {
 //   lado no:  ((100 - precioActual) - precioMedioNo) * cantidad / 100
 // El precio medio se saca de las operaciones (fills) ponderado por
 // cantidad; si no hay fills, se usa el campo que devuelva positions.
+// v13: explica una posición en claro en vez de mostrar 0¢ y guiones.
+// Causa del bug del video (12-nov): en el cliente, Number(null) es 0,
+// así que una posición sin precio medio o sin precio actual se veía
+// como "0¢". Aquí la posición lleva su `note` cuando algo falta:
+// cantidad 0 = cerrada/vencida; sin precio medio = no hay fills para
+// calcularlo; sin precio actual = mercado cerrado/vencido o sin
+// cotización. Función pura, probada en Node.
+function describePosition(p) {
+  const count = p.count;
+  if (count === 0) return 'Posición cerrada o sin cantidad abierta: Kalshi devuelve esta posición con cantidad 0 (puede estar liquidada o vencida). No hay nada que cobrar ni salir.';
+  if (p.avgPrice == null) return 'Sin precio medio: no hay operaciones (fills) registradas para calcular a qué precio entraste.';
+  if (p.currentPrice == null) return 'Sin precio actual: el mercado está cerrado, vencido o sin cotización en este momento.';
+  return null;
+}
+
 async function getPositions({ keyId, privateKeyPem }) {
   const creds = { keyId, privateKeyPem };
   const [posJson, balJson] = await Promise.all([
@@ -133,12 +148,14 @@ async function getPositions({ keyId, privateKeyPem }) {
     const yesPrice = mk.yesBid != null ? mk.yesBid : mk.yesAsk;
     const curPrice = side === 'yes' ? yesPrice : (yesPrice != null ? 100 - yesPrice : null);
     const pnl = (avgPrice != null && curPrice != null && absCount) ? +(((curPrice - avgPrice) * absCount) / 100).toFixed(2) : null;
-    positions.push({
+    const posOut = {
       ticker, side, title: mk.title || p.title || ticker, count: absCount,
       avgPrice, currentPrice: curPrice, pnl, status: mk.status || p.status || null,
       marketExposure: p.market_exposure != null ? Number(p.market_exposure) / 100 : null,
       realizedPnl: p.realized_pnl != null ? Number(p.realized_pnl) / 100 : null,
-    });
+    };
+    posOut.note = describePosition(posOut);
+    positions.push(posOut);
   }
   const balance = balJson ? { balance: balJson.balance != null ? Number(balJson.balance) / 100 : null, portfolioValue: balJson.portfolio_value != null ? Number(balJson.portfolio_value) / 100 : null } : null;
   return { positions, balance, fetchedAt: new Date().toISOString() };
@@ -150,4 +167,4 @@ async function testCredentials(creds) {
   return true;
 }
 
-module.exports = { BASE, READ_ONLY_PATHS, parsePrivateKey, signHeaders, kalshiGet, getPositions, testCredentials, marketPrice };
+module.exports = { BASE, READ_ONLY_PATHS, parsePrivateKey, signHeaders, kalshiGet, getPositions, testCredentials, marketPrice, describePosition };
