@@ -11,6 +11,14 @@ const { hashPassword, verifyPassword, signToken, authMiddleware, requireAdmin, l
 const { encrypt, decrypt, masterKey } = require('./crypto');
 const kalshi = require('./kalshiServer');
 const brti = require('./brti');
+const paperAuditor = require('./paperAuditor');
+
+// v16.1 — El auditor en papel persiste sus resultados (últimas 20
+// ventanas) en cev_user_data kind 'paper_audit', solo al cerrar
+// ventana y al parar/arrancar, nunca cada segundo.
+paperAuditor.setPersistencia(async (userId, resultados) => {
+  await db.setUserData(userId, 'paper_audit', { resultados, updatedAt: new Date().toISOString() });
+});
 
 const router = express.Router();
 
@@ -142,6 +150,7 @@ router.post('/kalshi/connect', auth, async (req, res) => {
 router.delete('/kalshi/connect', auth, async (req, res) => {
   await db.deleteKalshiConnection(req.user.id);
   brti.stopBrti(req.user.id); // cierra el WebSocket BRTI de este usuario
+  await paperAuditor.stopAuditor(req.user.id).catch(() => {}); // sin Kalshi no hay auditor
   res.json({ ok: true });
 });
 
@@ -176,6 +185,40 @@ router.get('/kalshi/brti', auth, async (req, res) => {
     stale,
     error: state.error,
   });
+});
+
+// v16.1 — AUDITOR EN PAPEL del sniper BRTI (sin dinero real).
+// Solo LEE: el estado BRTI en memoria + mercados públicos de Kalshi.
+// NUNCA envía órdenes a Kalshi: no hay ningún POST a Kalshi en este
+// archivo ni en server/paperAuditor.js (el payload V2 solo existe
+// como vista previa en papel). Sin Kalshi conectado no se puede
+// auditar: start devuelve 400 y GET devuelve enabled:false.
+router.get('/kalshi/paper-audit', auth, async (req, res) => {
+  const conn = await db.getKalshiConnection(req.user.id);
+  const snap = paperAuditor.getSnapshot(req.user.id);
+  if (!conn) return res.json({ ...snap, enabled: false, kalshiConnected: false, ultimoError: 'Kalshi no conectado: conecta tu cuenta Kalshi abajo para auditar en papel.' });
+  res.json({ ...snap, kalshiConnected: true });
+});
+
+router.post('/kalshi/paper-audit/start', auth, async (req, res) => {
+  const conn = await db.getKalshiConnection(req.user.id);
+  if (!conn) return res.status(400).json({ error: 'Conecta primero tu cuenta Kalshi (panel inferior): el auditor necesita el BRTI en vivo y sin conexión no hay nada que auditar.' });
+  let privateKeyPem;
+  try { privateKeyPem = decrypt(conn.privateKeyEncrypted); } catch (e) {
+    return res.status(500).json({ error: 'No se pudo descifrar tu clave de Kalshi en el servidor. Desconéctala y vuelve a conectarla.' });
+  }
+  // Arranca (o reutiliza) el WS BRTI de este usuario: el auditor lee
+  // de ahí cada segundo y así mantiene vivo el WS.
+  brti.ensureBrti(req.user.id, { keyId: conn.keyId, privateKeyPem });
+  const prev = await db.getUserData(req.user.id, 'paper_audit').catch(() => null);
+  const snap = paperAuditor.startAuditor(req.user.id, prev && Array.isArray(prev.resultados) ? prev.resultados : []);
+  res.json({ ok: true, ...snap, kalshiConnected: true });
+});
+
+router.post('/kalshi/paper-audit/stop', auth, async (req, res) => {
+  const snap = await paperAuditor.stopAuditor(req.user.id);
+  const conn = await db.getKalshiConnection(req.user.id);
+  res.json({ ok: true, ...snap, kalshiConnected: !!conn });
 });
 
 const posCache = new Map(); // userId -> {at, data}

@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS cev_kalshi_connections (
 );
 CREATE TABLE IF NOT EXISTS cev_user_data (
   user_id INTEGER NOT NULL REFERENCES cev_users(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN ('portfolio', 'alerts')),
+  kind TEXT NOT NULL CHECK (kind IN ('portfolio', 'alerts', 'paper_audit')),
   data JSONB NOT NULL DEFAULT '{}'::jsonb,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (user_id, kind)
@@ -82,6 +82,11 @@ function publicUser(u) {
 async function init() {
   if (hasPg) {
     await pool.query(SCHEMA);
+    // v16.1: migración para bases ya creadas con el CHECK viejo
+    // (solo 'portfolio','alerts'). El nombre del constraint lo genera
+    // Postgres como cev_user_data_kind_check.
+    await pool.query('ALTER TABLE cev_user_data DROP CONSTRAINT IF EXISTS cev_user_data_kind_check');
+    await pool.query(`ALTER TABLE cev_user_data ADD CONSTRAINT cev_user_data_kind_check CHECK (kind IN ('portfolio', 'alerts', 'paper_audit'))`);
     console.log('[db] Postgres conectado (Neon): tablas cev_* listas.');
   } else {
     fileLoad();
