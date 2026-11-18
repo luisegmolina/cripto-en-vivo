@@ -82,6 +82,15 @@ check('salto requerido enorme a la baja dispara NO a 20¢, viable tras comisión
   senalNo.ordenV2Preview.payload.side === 'ask');
 check('con 3 ticks perdidos NO hay señal (gate <= 2)', evaluarSenalPapel({ ...baseSenal, ticksPerdidos: 3 }) === null);
 check('con 2 ticks perdidos SÍ hay señal (límite del gate)', evaluarSenalPapel({ ...baseSenal, ticksPerdidos: 2 }) !== null);
+// Verificación de ecuación dimensionalmente exacta (totalMuestrasEfectivas = N + segundosRestantesReales):
+// Con R=10 (segundosRestantesReales=9) y 2 ticks perdidos (muestrasCapturadas=49 -> totalMuestrasEfectivas=58):
+// Si twapBloqueado = targetPrice (63000) y brtiValue = 63000, el salto requerido debe ser exactamente $0.00 (no inflado por usar 60 fijo).
+const senalSinInflar = evaluarSenalPapel({
+  ...baseSenal, targetPrice: 63000, twapBloqueado: 63000, brtiValue: 63000,
+  muestrasCapturadas: 49, ticksPerdidos: 2, segundosRestantes: 10,
+});
+check('ecuación totalMuestrasEfectivas (N + R - 1): 2 ticks perdidos con TWAP === Target da salto $0 y no dispara señal falsa',
+  senalSinInflar === null);
 check('fuera de T-18 a T-3 NO hay señal (R=20 y R=2)', evaluarSenalPapel({ ...baseSenal, segundosRestantes: 20 }) === null && evaluarSenalPapel({ ...baseSenal, segundosRestantes: 2 }) === null);
 check('sin salto suficiente NO hay señal (TWAP = objetivo)', evaluarSenalPapel({ ...baseSenal, twapBloqueado: 63000, brtiValue: 63000 }) === null);
 // Corrección a la especificación inicial: a 98¢ el neto es 1 - 0.98 - 0.07*0.98*0.02

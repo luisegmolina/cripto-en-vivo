@@ -50,7 +50,10 @@ export default function PaperAudit({ user, fmt }) {
     finally { setBusy(false); }
   }
 
-  const stats = data?.stats || { ventanas: 0, senales: 0, viables: 0, prediccionCorrecta: 0, prediccionTotal: 0 };
+  const stats = data?.stats || {
+    ventanas: 0, senales: 0, viables: 0, viablesLiquidadas: 0, aciertosEnViables: 0,
+    prediccionCorrecta: 0, prediccionTotal: 0, errorMedioAbsUSD: null, errorMaxAbsUSD: null,
+  };
   const resultados = Array.isArray(data?.resultados) ? data.resultados : [];
   const sim = data?.simulacion || null;
   const contrato = data?.contrato || null;
@@ -129,8 +132,10 @@ export default function PaperAudit({ user, fmt }) {
 
       <h3>Últimas auditorías ({stats.ventanas})</h3>
       <p className="muted">
-        Ventanas: {stats.ventanas} · Señales en papel: {stats.senales} · Viables tras comisión: {stats.viables} · Acierto de la predicción local: {stats.prediccionCorrecta}/{stats.prediccionTotal}
+        Ventanas: {stats.ventanas} · Señales en papel: {stats.senales} · Viables tras comisión: {stats.viables}
+        {stats.viablesLiquidadas > 0 ? ` (aciertos en viables: ${stats.aciertosEnViables}/${stats.viablesLiquidadas})` : ''} · Acierto de la predicción local: {stats.prediccionCorrecta}/{stats.prediccionTotal}
         {stats.prediccionTotal > 0 ? ` (${Math.round((stats.prediccionCorrecta / stats.prediccionTotal) * 100)}%)` : ' (sin ventanas liquidadas todavía)'}
+        {stats.errorMedioAbsUSD != null ? ` · Error |TWAP−Oficial| medio: $${fmtNum(stats.errorMedioAbsUSD)} (máx: $${fmtNum(stats.errorMaxAbsUSD)})` : ''}
       </p>
       {resultados.length === 0 ? (
         <p className="muted">Aún no hay ventanas auditadas. Inicia el auditor y deja pasar al menos una ventana de 15 minutos.</p>

@@ -112,7 +112,8 @@ function evaluarSenalPapel({
   if (segundosRestantesReales <= 0) return null;
 
   const sumaAcumulada = twapBloqueado * muestrasCapturadas;
-  const brtiRequeridoRestante = ((targetPrice * 60) - sumaAcumulada) / segundosRestantesReales;
+  const totalMuestrasEfectivas = muestrasCapturadas + segundosRestantesReales;
+  const brtiRequeridoRestante = ((targetPrice * totalMuestrasEfectivas) - sumaAcumulada) / segundosRestantesReales;
   const saltoRequeridoUSD = brtiRequeridoRestante - brtiValue;
 
   let direccion = null;
@@ -165,22 +166,36 @@ function finalizarVentana(estado, oficial) {
     brtiLiquidacionOficial: Number.isFinite(expirationValue) ? expirationValue : null,
     errorTwapVsOficial: (Number.isFinite(expirationValue) && twap != null) ? +(twap - expirationValue).toFixed(2) : null,
     simulacion: estado.simulacion || null,
-    closedAt: new Date().toISOString(),
+    closedAt: estado.closedAt || new Date().toISOString(),
   };
 }
 
 function calcularStats(resultados) {
   const list = Array.isArray(resultados) ? resultados : [];
   const senales = list.filter((r) => r.simulacion).length;
-  const viables = list.filter((r) => r.simulacion && r.simulacion.viableDespuesDeComision).length;
+  const viablesList = list.filter((r) => r.simulacion && r.simulacion.viableDespuesDeComision);
+  const viables = viablesList.length;
+  const viablesLiquidadas = viablesList.filter((r) => r.resultadoOficialKalshi && r.resultadoOficialKalshi !== 'pendiente');
+  const aciertosEnViables = viablesLiquidadas.filter((r) => r.simulacion.direccionElegida === r.resultadoOficialKalshi).length;
   const conPrediccion = list.filter((r) => r.prediccionLocal && r.resultadoOficialKalshi && r.resultadoOficialKalshi !== 'pendiente');
   const aciertos = conPrediccion.filter((r) => r.prediccionLocal === r.resultadoOficialKalshi).length;
+  const conError = list.filter((r) => r.errorTwapVsOficial != null && Number.isFinite(Number(r.errorTwapVsOficial)));
+  const errorMedioAbsUSD = conError.length > 0
+    ? +(conError.reduce((s, r) => s + Math.abs(Number(r.errorTwapVsOficial)), 0) / conError.length).toFixed(2)
+    : null;
+  const errorMaxAbsUSD = conError.length > 0
+    ? +conError.reduce((m, r) => Math.max(m, Math.abs(Number(r.errorTwapVsOficial))), 0).toFixed(2)
+    : null;
   return {
     ventanas: list.length,
     senales,
     viables,
+    viablesLiquidadas: viablesLiquidadas.length,
+    aciertosEnViables,
     prediccionCorrecta: aciertos,
     prediccionTotal: conPrediccion.length,
+    errorMedioAbsUSD,
+    errorMaxAbsUSD,
   };
 }
 
@@ -449,8 +464,9 @@ async function tickAuditor(userId, ahoraMs = Date.now(), deps = {}) {
       est.quoteActual = quote ? { yesAskDollars: quote.yesAskDollars, noAskDollars: quote.noAskDollars } : null;
 
       const segundosRestantesReales = Math.max(R - 1, 0);
+      const totalMuestrasEfectivas = n + segundosRestantesReales;
       const brtiRequeridoRestante = (segundosRestantesReales > 0 && twap != null)
-        ? ((est.contrato.targetPrice * 60) - suma) / segundosRestantesReales
+        ? ((est.contrato.targetPrice * totalMuestrasEfectivas) - suma) / segundosRestantesReales
         : twap;
       est.saltoActual = (brtiRequeridoRestante != null && Number.isFinite(brtiRequeridoRestante))
         ? +(brtiRequeridoRestante - estadoBrti.value).toFixed(2)
@@ -491,15 +507,36 @@ async function tickAuditor(userId, ahoraMs = Date.now(), deps = {}) {
       est.ticksPerdidosActual = null;
       est.quoteActual = null;
       est.ultimoDescubrimientoMs = 0;
+      const guardarOActualizarRegistro = async (oficial) => {
+        const registro = finalizarVentana(estadoCierre, oficial);
+        const e2 = auditors.get(userId);
+        if (!e2) return registro;
+        const idx = e2.resultados.findIndex((r) => r.ticker === tickerCerrado && r.closedAt === estadoCierre.closedAt);
+        if (idx >= 0) {
+          e2.resultados[idx] = registro;
+        } else {
+          estadoCierre.closedAt = registro.closedAt;
+          e2.resultados.unshift(registro);
+          e2.resultados = e2.resultados.slice(0, MAX_RESULTADOS);
+        }
+        await persistir(userId);
+        return registro;
+      };
       const t = setTimeout(async () => {
         let oficial = null;
         try { oficial = await cotizar(tickerCerrado); } catch { oficial = null; }
-        const registro = finalizarVentana(estadoCierre, oficial);
-        const e2 = auditors.get(userId);
-        if (!e2) return;
-        e2.resultados.unshift(registro);
-        e2.resultados = e2.resultados.slice(0, MAX_RESULTADOS);
-        await persistir(userId);
+        const reg15 = await guardarOActualizarRegistro(oficial);
+        // Si a los 15 s Kalshi aún no ha publicado result o expiration_value, reintenta a los 45 s (30 s después).
+        if (!reg15 || reg15.resultadoOficialKalshi === 'pendiente' || reg15.brtiLiquidacionOficial == null) {
+          const t2 = setTimeout(async () => {
+            let oficial45 = null;
+            try { oficial45 = await cotizar(tickerCerrado); } catch { oficial45 = null; }
+            if (oficial45 && (oficial45.result || oficial45.expirationValue != null)) {
+              await guardarOActualizarRegistro(oficial45);
+            }
+          }, 30000);
+          if (t2.unref) t2.unref();
+        }
       }, 15000);
       if (t.unref) t.unref();
       return getSnapshot(userId, ahoraMs);
