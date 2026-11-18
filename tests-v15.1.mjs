@@ -88,7 +88,7 @@ check('el sondeo retenido marca el dato como desactualizado (stale: true)', app.
 // apodo vive en localStorage). Endurecido: la dependencia es user?.id.
 console.log('FALLO 5 — re-renders por [activeTab, symbol, user] (FALSO: activeTab es constante)');
 check("activeTab es una constante 'kalshi', no hay pestañas", app.includes("const activeTab = 'kalshi'"));
-check('el efecto BRTI depende de user?.id (no del objeto user entero)', /setInterval\(load, 2000\)[\s\S]{0,200}\}, \[activeTab, symbol, user\?\.id\]\)/.test(app));
+check('el efecto BRTI depende de user?.id (no del objeto user entero)', /visibleInterval\(load, 2000\)[\s\S]{0,200}\}, \[activeTab, symbol, user\?\.id\]\)/.test(app));
 check('el apodo vive en localStorage, no en el objeto user', app.includes("saveLS('cev_profile_v1'"));
 
 // --- Error extra del código pegado: SAL AHORA en verde ---

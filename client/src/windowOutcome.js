@@ -25,6 +25,15 @@
 //   señal apostaba a un movimiento que no se dio.
 
 import { analyze } from './analysis.js';
+import { wilson95 } from './stats.js';
+
+// v15.2 — CORRECCIÓN DE SESGO (look-ahead). Antes la señal de la ventana i se
+// calculaba con tail.slice(0, i + 1), es decir CON el cierre de la ventana i, y
+// luego se comparaba ese mismo cierre contra la apertura. La señal ya "sabía"
+// cómo había terminado la vela, así que el acierto salía inflado. Ahora la
+// señal se calcula solo con las velas ANTERIORES (slice(0, i)), que es lo único
+// que se conoce cuando abre la ventana, y se juzga la vela i. Los porcentajes
+// de acierto medidos así son más bajos (y más honestos) que los anteriores.
 
 export function evaluateWindowSignal(candles, maxItems = 5) {
   if (!candles || candles.length < 32) return [];
@@ -33,7 +42,7 @@ export function evaluateWindowSignal(candles, maxItems = 5) {
   // vela, en curso, queda fuera: el bucle llega a length - 2).
   const tail = candles.slice(-181);
   for (let i = 30; i < tail.length - 1; i++) {
-    const a = analyze(tail.slice(0, i + 1));
+    const a = analyze(tail.slice(0, i)); // solo velas anteriores a la ventana i
     if (a.label === 'Sin señal clara') continue;
     const up = a.label === 'Posible subida';
     const c = tail[i];
@@ -56,7 +65,7 @@ export function backtestWindowSignal(candles, maxWindows = 120) {
   const tail = candles.slice(-(maxWindows + 31));
   let wins = 0, total = 0, upWins = 0, upTotal = 0, downWins = 0, downTotal = 0;
   for (let i = 30; i < tail.length - 1; i++) {
-    const a = analyze(tail.slice(0, i + 1));
+    const a = analyze(tail.slice(0, i)); // solo velas anteriores a la ventana i
     if (a.label === 'Sin señal clara') continue;
     const predictedUp = a.label === 'Posible subida';
     const c = tail[i];
@@ -73,6 +82,7 @@ export function backtestWindowSignal(candles, maxWindows = 120) {
   return {
     wins, total,
     pct: total ? Math.round((wins / total) * 100) : null,
+    ci95: wilson95(wins, total),
     upWins, upTotal, downWins, downTotal,
     basis: 'window-close-vs-open',
     note: total ? '' : 'No hubo señales claras en las velas analizadas.',

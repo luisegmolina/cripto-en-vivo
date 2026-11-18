@@ -9,7 +9,15 @@ const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-app.use(cors());
+// v15.2: Render (y Vercel) van detrás de un proxy: sin esto req.ip es la del
+// proxy y los límites de intentos no distinguen clientes. TRUST_PROXY=0 lo apaga.
+app.set('trust proxy', Number(process.env.TRUST_PROXY ?? 1));
+// v15.2: CORS ya no está abierto a todo el mundo. La web y la API comparten
+// origen, así que en producción no hace falta. Si algún día un cliente en otro
+// origen (p. ej. una app Capacitor) llama a la API: CORS_ORIGINS=https://a.com,https://b.com
+const corsOrigins = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+if (corsOrigins.length) app.use(cors({ origin: corsOrigins }));
+else if (process.env.NODE_ENV !== 'production') app.use(cors());
 app.use(express.json());
 
 const ASSETS = [
@@ -29,7 +37,10 @@ const CURRENCIES = ['USD', 'EUR', 'GBP'];
 const normCurrency = (c) => CURRENCIES.includes(String(c || '').toUpperCase()) ? String(c).toUpperCase() : 'USD';
 
 // ---- util: fetch con timeout de 5 s ----
-async function fetchJSON(url, ms = 5000) {
+// v15.2: 2,5 s por fuente (antes 5 s): con la cadena de 4 fuentes el peor caso
+// pasa de 20 s a 10 s y deja de rozar el límite de las funciones de Vercel Hobby.
+const SOURCE_TIMEOUT_MS = Number(process.env.SOURCE_TIMEOUT_MS) || 2500;
+async function fetchJSON(url, ms = SOURCE_TIMEOUT_MS) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
   try {
@@ -97,16 +108,19 @@ async function tickerCoinbase(asset, cur) {
   // BUG CORREGIDO: antes ticker y stats iban en un Promise.all; si stats
   // fallaba, se perdía el precio aunque el ticker sí había respondido.
   // Ahora el precio manda: stats es opcional, si falla se usan nulls.
-  const t = await fetchJSON(`https://api.exchange.coinbase.com/products/${pair}/ticker`);
+  // v15.2: ticker y stats en paralelo (antes uno tras otro). allSettled
+  // mantiene la regla de arriba: si stats falla, el precio sigue valiendo.
+  const [tRes, sRes] = await Promise.allSettled([
+    fetchJSON(`https://api.exchange.coinbase.com/products/${pair}/ticker`),
+    fetchJSON(`https://api.exchange.coinbase.com/products/${pair}/stats`),
+  ]);
+  if (tRes.status !== 'fulfilled') throw tRes.reason;
+  const t = tRes.value;
   const price = Number(t.price);
   if (!price) throw new Error('Coinbase sin precio');
   let s = null;
-  try {
-    s = await fetchJSON(`https://api.exchange.coinbase.com/products/${pair}/stats`);
-  } catch (e) {
-    logSourceFail('Coinbase stats', pair, e);
-    s = null;
-  }
+  if (sRes.status === 'fulfilled') s = sRes.value;
+  else logSourceFail('Coinbase stats', pair, sRes.reason);
   const open = s ? Number(s.open) : null;
   return {
     price,
@@ -503,5 +517,17 @@ if (!process.env.VERCEL) {
     res.sendFile(path.join(dist, 'index.html'), (err) => { if (err) next(); });
   });
 }
+
+// v15.2: manejador final de errores. Cualquier error que llegue por next(err)
+// (incluidos los rechazos de handlers async envueltos en routes.js y los JSON
+// mal formados de express.json) responde en JSON y no deja la petición colgada.
+// Debe ir DESPUÉS de todas las rutas.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  const status = Number(err && (err.status || err.statusCode)) || 500;
+  if (status >= 500) console.log(`[server] error no controlado en ${req.method} ${req.path}:`, err && err.message ? err.message : err);
+  const msg = status >= 500 ? 'Error interno del servidor. Inténtalo de nuevo.' : (err && err.type === 'entity.parse.failed' ? 'JSON no válido en la petición.' : 'Petición no válida.');
+  res.status(status >= 500 ? 500 : status).json({ error: msg });
+});
 
 module.exports = app;

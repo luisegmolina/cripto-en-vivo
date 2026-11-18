@@ -9,28 +9,46 @@ export function ema(values, period) {
   for (let i = period; i < values.length; i++) e = values[i] * k + e * (1 - k);
   return e;
 }
+// v15.2: RSI con el suavizado de Wilder (el estándar de TradingView, Coinbase, etc.).
+// Antes era una media simple de las últimas 14 variaciones, que da otros números.
+// Una sola pasada O(n): rsiSeries devuelve el RSI de cada vela y rsi() el último.
+export function rsiSeries(closes, period = 14) {
+  const out = new Array(closes.length).fill(null);
+  if (closes.length < period + 1) return out;
+  let avgGain = 0, avgLoss = 0;
+  for (let i = 1; i <= period; i++) {
+    const d = closes[i] - closes[i - 1];
+    if (d >= 0) avgGain += d; else avgLoss -= d;
+  }
+  avgGain /= period; avgLoss /= period;
+  const toRsi = () => (avgLoss === 0 ? (avgGain === 0 ? 50 : 100) : 100 - 100 / (1 + avgGain / avgLoss));
+  out[period] = toRsi();
+  for (let i = period + 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1];
+    avgGain = (avgGain * (period - 1) + (d > 0 ? d : 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + (d < 0 ? -d : 0)) / period;
+    out[i] = toRsi();
+  }
+  return out;
+}
 export function rsi(closes, period = 14) {
   if (closes.length < period + 1) return null;
-  let gain = 0, loss = 0;
-  for (let i = closes.length - period; i < closes.length; i++) {
-    const d = closes[i] - closes[i - 1];
-    if (d >= 0) gain += d; else loss -= d;
-  }
-  if (loss === 0) return 100;
-  const rs = (gain / period) / (loss / period);
-  return 100 - 100 / (1 + rs);
+  const s = rsiSeries(closes, period);
+  return s[s.length - 1];
 }
+// v15.2: MACD estándar (12, 26, 9). La señal es la EMA de 9 de la línea MACD
+// (antes era la media de 9 valores) y las EMA se calculan una vez (antes se
+// recalculaban desde cero en cada paso, O(n²)). Si aún no hay 9 valores de la
+// línea MACD (menos de 34 velas) devuelve null: sin dato en vez de un histograma falso.
 export function macd(closes) {
-  const e12 = ema(closes, 12), e26 = ema(closes, 26);
-  if (e12 == null || e26 == null) return null;
-  const line = e12 - e26;
-  // Histograma aproximado con la serie de líneas MACD de las últimas 9 velas
+  if (closes.length < 34) return null;
+  const e12 = emaSeries(closes, 12), e26 = emaSeries(closes, 26);
   const lines = [];
-  for (let n = 26; n <= closes.length; n++) {
-    const a = ema(closes.slice(0, n), 12), b = ema(closes.slice(0, n), 26);
-    if (a != null && b != null) lines.push(a - b);
-  }
-  const signal = lines.length >= 9 ? ema(lines.slice(-9), 9) ?? lines[lines.length - 1] : line;
+  for (let i = 0; i < closes.length; i++) if (e12[i] != null && e26[i] != null) lines.push(e12[i] - e26[i]);
+  const sig = emaSeries(lines, 9);
+  const line = lines[lines.length - 1];
+  const signal = sig[sig.length - 1];
+  if (signal == null) return null;
   return { line, signal, histogram: line - signal };
 }
 export function bollinger(closes, period = 20) {
@@ -88,14 +106,6 @@ export function bollingerSeries(closes, period = 20) {
     const sd = Math.sqrt(s.reduce((a, b) => a + (b - mean) ** 2, 0) / period);
     out[i] = { middle: mean, upper: mean + 2 * sd, lower: mean - 2 * sd };
   }
-  return out;
-}
-
-// Serie RSI completa (un valor por vela, null hasta tener 15 velas)
-// para dibujarla como panel inferior del gráfico.
-export function rsiSeries(closes, period = 14) {
-  const out = new Array(closes.length).fill(null);
-  for (let i = period; i < closes.length; i++) out[i] = rsi(closes.slice(0, i + 1), period);
   return out;
 }
 

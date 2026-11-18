@@ -14,6 +14,7 @@
 // futuro: una señal que acertó el 60% de las veces puede fallar mañana.
 
 import { analyze } from './analysis.js';
+import { wilson95 } from './stats.js';
 
 export function backtestSignal(candles, maxWindows = 120) {
   if (!candles || candles.length < 32) {
@@ -40,6 +41,7 @@ export function backtestSignal(candles, maxWindows = 120) {
   return {
     wins, total,
     pct: total ? Math.round((wins / total) * 100) : null,
+    ci95: wilson95(wins, total),
     upWins, upTotal, downWins, downTotal,
     note: total ? '' : 'No hubo señales claras en las velas analizadas.',
   };

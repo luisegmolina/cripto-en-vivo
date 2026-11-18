@@ -7,12 +7,24 @@
 // las respuestas solo traen keyIdPreview (4 primeros + 4 últimos).
 const express = require('express');
 const db = require('./db');
-const { hashPassword, verifyPassword, signToken, authMiddleware, requireAdmin, loginRateLimit } = require('./auth');
+const { hashPassword, verifyPassword, signToken, authMiddleware, requireAdmin, loginRateLimit, registerRateLimit, DUMMY_HASH } = require('./auth');
 const { encrypt, decrypt, masterKey } = require('./crypto');
 const kalshi = require('./kalshiServer');
 const brti = require('./brti');
 
 const router = express.Router();
+
+// v15.2: Express 4 no captura los rechazos de los handlers async: si la BD
+// fallaba, la petición se quedaba colgada y Node podía caerse por un
+// unhandledRejection. Aquí se envuelve cada handler async de este router
+// para que el error vaya al manejador final de app.js (500 JSON).
+const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+for (const verb of ['get', 'post', 'put', 'patch', 'delete']) {
+  const orig = router[verb].bind(router);
+  router[verb] = (p, ...handlers) => orig(p, ...handlers.flat().map((h) => (
+    typeof h === 'function' && h.constructor.name === 'AsyncFunction' ? asyncHandler(h) : h
+  )));
+}
 const auth = authMiddleware(db);
 const keyIdPreview = (k) => (k && k.length > 8 ? `${k.slice(0, 4)}…${k.slice(-4)}` : '••••');
 
@@ -32,8 +44,13 @@ async function init() {
     if (n === 0) {
       const existing = await db.getUserByEmail(adminEmail);
       if (existing) {
+        // v15.2: antes solo se cambiaba la contraseña y la cuenta seguía
+        // siendo 'user' (el admin nunca se creaba). Ahora se promueve y se
+        // reactiva; setUserPassword/setUserRole invalidan sesiones previas.
         await db.setUserPassword(existing.id, await hashPassword(adminPass));
-        console.log(`[auth] Admin existente (${adminEmail}): contraseña actualizada desde ADMIN_PASSWORD.`);
+        await db.setUserRole(existing.id, 'admin');
+        await db.setUserActive(existing.id, true);
+        console.log(`[auth] Cuenta ${adminEmail} promovida a admin y contraseña actualizada desde ADMIN_PASSWORD.`);
       } else {
         await db.createUser({ email: adminEmail, passwordHash: await hashPassword(adminPass), name: 'Luis', role: 'admin' });
         console.log(`[auth] Admin creado: ${adminEmail}. Quita ADMIN_PASSWORD de Render tras entrar.`);
@@ -43,7 +60,7 @@ async function init() {
 }
 
 // --- Auth ---
-router.post('/auth/register', async (req, res) => {
+router.post('/auth/register', registerRateLimit, async (req, res) => {
   const { email, password, name } = req.body || {};
   if (!validEmail(email)) return res.status(400).json({ error: 'Pon un email válido.' });
   if (!password || String(password).length < 8) return res.status(400).json({ error: 'La contraseña necesita al menos 8 caracteres.' });
@@ -61,7 +78,10 @@ router.post('/auth/login', loginRateLimit, async (req, res) => {
   const { email, password } = req.body || {};
   if (!validEmail(email) || !password) return res.status(400).json({ error: 'Pon tu email y tu contraseña.' });
   const user = await db.getUserByEmail(email);
-  if (!user || !(await verifyPassword(password, user.password_hash))) return res.status(401).json({ error: 'Email o contraseña incorrectos.' });
+  // v15.2: siempre se ejecuta bcrypt (contra DUMMY_HASH si no hay cuenta) para
+  // que el tiempo de respuesta no delate si el email existe.
+  const passwordOk = await verifyPassword(password, user ? user.password_hash : DUMMY_HASH);
+  if (!user || !passwordOk) return res.status(401).json({ error: 'Email o contraseña incorrectos.' });
   if (user.active === false) return res.status(403).json({ error: 'Tu cuenta está desactivada. Habla con el administrador.' });
   const pub = db.publicUser(user);
   return res.json({ token: signToken(pub), user: pub });

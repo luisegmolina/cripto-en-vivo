@@ -191,3 +191,32 @@ sin conectar, clave .pem inválida, clave de prueba rechazada por
 Kalshi, cifrado AES-256-GCM (el blob no contiene el pem en claro),
 firma Ed25519 y RSA-PSS verificadas, allowlist de solo 3 rutas
 GET de Kalshi, y que no hay POST/PUT/DELETE a Kalshi en el servidor.
+
+## v15.2 — Parches de la revisión (17-nov-2026)
+
+Variables de entorno nuevas (todas opcionales):
+
+- `CORS_ORIGINS` — lista separada por comas de orígenes permitidos. Sin ella,
+  en producción no se mandan cabeceras CORS (web y API comparten origen).
+  Solo hace falta si un cliente en otro origen (p. ej. una app Capacitor)
+  llama a la API.
+- `TRUST_PROXY` — saltos de proxy de confianza (por defecto 1, correcto en
+  Render y Vercel). Con `0` se apaga.
+- `DATABASE_SSL_INSECURE=1` — solo para diagnosticar: vuelve a desactivar la
+  verificación del certificado de Postgres. No lo dejes puesto.
+- `SOURCE_TIMEOUT_MS` — timeout por fuente de precios (por defecto 2500).
+
+`DATABASE_URL`: pon `?sslmode=verify-full` al final (Neon lo soporta). Con
+`sslmode=require` hoy `pg` ya verifica, pero la próxima versión mayor de `pg`
+cambiará ese significado.
+
+Sesiones: cambiar la contraseña o el rol de una cuenta (también el arranque
+con `ADMIN_EMAIL`/`ADMIN_PASSWORD`) invalida los JWT anteriores. La columna
+`token_valid_after` se crea sola al arrancar.
+
+Vercel: `ws` ya está en el `package.json` raíz (hace falta porque `app.js`
+carga `brti.js`). Tras actualizar, ejecuta `npm install` para refrescar el lock.
+El modo archivo (`server/data/db.json`) no puede escribir en Vercel: allí hace
+falta `DATABASE_URL`.
+
+Tests offline nuevos: `npm test` (no necesita servidor ni red).

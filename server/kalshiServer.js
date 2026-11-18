@@ -339,6 +339,11 @@ async function getPositions({ keyId, privateKeyPem }) {
     cur.count += fCount;
     avgByKey.set(k, cur);
   }
+  // v15.2: los precios de mercado se piden TODOS a la vez (antes un await por
+  // posición, uno tras otro). marketPrice ya cachea 10 s y nunca lanza.
+  const marketByTicker = new Map(await Promise.all(
+    [...new Set(raw.map((p) => p.ticker).filter(Boolean))].map(async (t) => [t, await marketPrice(t)]),
+  ));
   const positions = [];
   for (const p of raw) {
     const ticker = p.ticker;
@@ -361,7 +366,7 @@ async function getPositions({ keyId, privateKeyPem }) {
       avgPrice = +((Number(p.total_traded_dollars) * 100) / absCount).toFixed(2);
     }
     if (avgPrice == null && p.avg_price != null) avgPrice = Number(p.avg_price) || null;
-    const mk = await marketPrice(ticker);
+    const mk = marketByTicker.get(ticker);
     const yesPrice = mk.yesBid != null ? mk.yesBid : mk.yesAsk;
     const curPrice = side === 'yes' ? yesPrice : side === 'no' ? (yesPrice != null ? 100 - yesPrice : null) : null;
     const pnl = (avgPrice != null && curPrice != null && absCount) ? +(((curPrice - avgPrice) * absCount) / 100).toFixed(2) : null;

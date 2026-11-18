@@ -103,13 +103,13 @@ check('§3: SAL AHORA / AGUANTA / INVIERTE MÁS + aviso de más riesgo + sugeren
 check('§3: sin posición no hay decisión inventada',
   mainReturn.includes('Sin posición abierta en Kalshi ahora mismo: no hay decisión que tomar'));
 check('§4: veredicto SUBE/BAJA/ESPERAR con fuerza, confianza y porqué',
-  mainReturn.includes('verdict-main') && mainReturn.includes('Fuerza:') && mainReturn.includes('Confianza (confluencia)'));
+  mainReturn.includes('verdict-main') && mainReturn.includes('Fuerza:') && mainReturn.includes('Índice de coincidencia'));
 check('§5: gráfica BTC 15m al final, con chartRef',
   mainReturn.includes('5 · Gráfica · BTC 15m') && mainReturn.includes('<div ref={chartRef} className="chart" />'));
 
 console.log('v15 — actualización rápida solo para §1-§2');
-check('BRTI se sondea cada 2 s (no 3 s)', app.includes("setInterval(load, 2000)") && app.includes("apiAuth('/api/kalshi/brti')"));
-check('mercado Kalshi (objetivo + SÍ/NO) cada 15 s (caché del servidor)', app.includes('setInterval(load, 15000)') && app.includes("api('/api/kalshi-market')"));
+check('BRTI se sondea cada 2 s (no 3 s)', app.includes("visibleInterval(load, 2000)") && app.includes("apiAuth('/api/kalshi/brti')"));
+check('mercado Kalshi (objetivo + SÍ/NO) cada 15 s (caché del servidor)', app.includes('visibleInterval(load, 15000)') && app.includes("api('/api/kalshi-market')"));
 check('posiciones se refrescan cada 30 s (KalshiConnect) y el P&L se recalcula con cada tick BRTI',
   kc.includes('30000') && mainReturn.includes('el P&L se recalcula con cada tick BRTI (cada 2 s)'));
 check('fallback: "Sin valor en vivo de Kalshi" + precio de Coinbase con aviso, nunca en blanco',

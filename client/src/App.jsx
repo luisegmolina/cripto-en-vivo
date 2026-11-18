@@ -5,6 +5,7 @@ import { updateLastCandle, candlesSignature, mergeServerCandles } from './liveCa
 import { fearGreedEstimate, heatToday, isoWeekKey, rivalsForWeek } from './marketPro.js';
 import { backtestSignal } from './backtest.js';
 import { evaluateWindowSignal, backtestWindowSignal } from './windowOutcome.js';
+import { isCoinFlip } from './stats.js';
 import { multiTfVerdict, reasonsFor, tradePlan, signalHistory, atr, VERDICT_TFS } from './verdict.js';
 import { KALSHI_WINDOW_MS, window15m, fmtClock, fmtCountdown, kalshiVerdictForScore, strengthForScore, estimatedProb, adjustProbForRecent, recentWinRate, cashOutDecision, suggestedExitPrice, brtiPositionOutcome, estimateSettlementPnl, liveDecision } from './kalshi.js';
 import { MISSIONS, levelForXp, xpIntoLevel, XP_PER_LEVEL } from './missions.js';
@@ -35,6 +36,15 @@ const ACHIEVEMENTS = [
   { id: 'cazador_top', name: 'Cazador del top', desc: 'Compra el activo que más sube en 24 h.' },
   { id: 'explorador', name: 'Explorador', desc: 'Mira los gráficos de 5 activos distintos.' },
 ];
+
+// v15.2: setInterval que no consulta al servidor con la pestaña oculta y se
+// pone al día en cuanto vuelves a ella. Devuelve la función que lo detiene.
+function visibleInterval(fn, ms) {
+  const t = setInterval(() => { if (!document.hidden) fn(); }, ms);
+  const onVisible = () => { if (!document.hidden) fn(); };
+  document.addEventListener('visibilitychange', onVisible);
+  return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVisible); };
+}
 
 async function api(path) {
   const ctrl = new AbortController();
@@ -582,8 +592,8 @@ export default function App() {
       } catch { if (alive) setKalshiMarket({ source: 'coinbase', targetPrice: null }); }
     };
     load();
-    const t = setInterval(load, 15000);
-    return () => { alive = false; clearInterval(t); };
+    const stop = visibleInterval(load, 15000);
+    return () => { alive = false; stop(); };
   }, [symbol]);
 
   // v13.5: valor BRTI en vivo de Kalshi, cada 2 s con la pantalla
@@ -604,8 +614,8 @@ export default function App() {
       } catch { if (alive) setBrti((prev) => (prev && prev.source === 'kalshi' && prev.value != null) ? { ...prev, status: 'error', stale: true, error: 'No se pudo leer el BRTI del servidor: se mantiene el último valor conocido.' } : { source: 'coinbase', value: null, status: 'error', error: 'No se pudo leer el BRTI del servidor.' }); }
     };
     load();
-    const t = setInterval(load, 2000);
-    return () => { alive = false; clearInterval(t); };
+    const stop = visibleInterval(load, 2000);
+    return () => { alive = false; stop(); };
   }, [activeTab, symbol, user?.id]);
 
   // v9: capitalización total y dominio de BTC REALES, de /api/global
@@ -627,8 +637,8 @@ export default function App() {
       } catch { if (alive) { setGlobalData(null); setGlobalRetrySec(60); } }
     };
     load();
-    const t = setInterval(load, 300000);
-    return () => { alive = false; clearInterval(t); };
+    const stop = visibleInterval(load, 300000);
+    return () => { alive = false; stop(); };
   }, []);
   const capText = globalData && globalData.totalMarketCapUsd
     ? `$${(globalData.totalMarketCapUsd / 1e12).toFixed(2)} billones`
@@ -715,10 +725,8 @@ export default function App() {
       } catch (e) { if (alive) setCandlesError(String(e.message || e)); }
     };
     loadTicker(); loadMarkets(); loadCandles();
-    const t1 = setInterval(loadTicker, 1000);
-    const t2 = setInterval(loadMarkets, 10000);
-    const t3 = setInterval(loadCandles, 6000);
-    return () => { alive = false; clearInterval(t1); clearInterval(t2); clearInterval(t3); };
+    const stops = [visibleInterval(loadTicker, 1000), visibleInterval(loadMarkets, 10000), visibleInterval(loadCandles, 6000)];
+    return () => { alive = false; stops.forEach((stop) => stop()); };
   }, [symbol, currency, candleInterval]);
 
   // Al cambiar de activo/moneda/intervalo, la vela en curso es otra.
@@ -749,8 +757,8 @@ export default function App() {
       });
     };
     load();
-    const t = setInterval(load, 20000);
-    return () => { alive = false; clearInterval(t); };
+    const stop = visibleInterval(load, 20000);
+    return () => { alive = false; stop(); };
   }, [symbol, currency]);
 
   // Velas de BTC para "comparar contra BTC" (solo cuando está activo).
@@ -764,8 +772,8 @@ export default function App() {
       } catch { /* si falla, la comparación simplemente no se dibuja */ }
     };
     load();
-    const t = setInterval(load, 10000);
-    return () => { alive = false; clearInterval(t); };
+    const stop = visibleInterval(load, 10000);
+    return () => { alive = false; stop(); };
   }, [compareBtc, symbol, currency, candleInterval]);
 
   // --- Alertas de precio personalizadas: se comprueban con cada tick ---
@@ -812,7 +820,7 @@ export default function App() {
     if (prev === verdictKeyNow) return;
     const flips = (prev === 'buy' && verdictKeyNow === 'sell') || (prev === 'sell' && verdictKeyNow === 'buy');
     const msg = flips
-      ? `🚨 CAMBIO DE SEÑAL ${symbol}: ${prev === 'buy' ? 'COMPRAR' : 'VENDER'} → ${verdictKeyNow === 'buy' ? 'COMPRAR' : 'VENDER'} (puntuación ${mtfVerdict.score}, confianza ${mtfVerdict.confidence}%) — ${new Date().toLocaleTimeString('es-US')}`
+      ? `🚨 CAMBIO DE SEÑAL ${symbol}: ${prev === 'buy' ? 'COMPRAR' : 'VENDER'} → ${verdictKeyNow === 'buy' ? 'COMPRAR' : 'VENDER'} (puntuación ${mtfVerdict.score}, índice de coincidencia ${mtfVerdict.confidence}/95) — ${new Date().toLocaleTimeString('es-US')}`
       : `🔔 Señal ${symbol}: ahora ${mtfVerdict.verdict.label} (puntuación ${mtfVerdict.score}) — ${new Date().toLocaleTimeString('es-US')}`;
     const nowMs = Date.now();
     const chk = shouldSignalAlert(lastSignalAlertRef.current, nowMs);
@@ -1463,12 +1471,15 @@ export default function App() {
             <div className="verdict-meta">
               <span>Puntuación 15m: <b>{kalshiScore}</b> / −100 a +100</span>
               <span>Fuerza: <b>{strengthForScore(kalshiScore)}</b></span>
-              <span>Confianza (confluencia): <b>{kalshiProbAdj}% estimado*</b></span>
+              <span>Índice de coincidencia: <b>{kalshiProbAdj}/100*</b></span>
             </div>
           </div>
-          <p className="muted">* Probabilidad ESTIMADA propia a partir de la señal (puntuación + timeframes que coinciden). NO es la probabilidad oficial de Kalshi. Una señal que acertó ~56% en 1h puede fallar en 15 minutos.</p>
+          <p className="muted">* Índice propio (puntuación + timeframes que coinciden). NO es una probabilidad de ganar y NO es la probabilidad oficial de Kalshi. Una señal que acertó ~56% en 1h puede fallar en 15 minutos.</p>
+          {kalshiBacktest.total >= 5 && kalshiBacktest.ci95 && (
+            <p className="muted">Medido como liquida Kalshi (señal calculada ANTES de abrir cada ventana): acertó {kalshiBacktest.wins} de {kalshiBacktest.total} ({kalshiBacktest.pct}%; margen al 95%: {kalshiBacktest.ci95.low}–{kalshiBacktest.ci95.high}%).{isCoinFlip(kalshiBacktest.ci95) ? ' Con estas muestras no se distingue de lanzar una moneda.' : ''}</p>
+          )}
           {kalshiWeakSignal && (
-            <p className="warn">⚠️ SEÑAL DÉBIL — Últimas {kalshiRecent.total} ventanas con señal clara de 15 min: la señal solo acertó {kalshiRecent.wins} ({Math.round(kalshiRecent.rate * 100)}%). Está fallando últimamente: la confianza se bajó a {kalshiProbAdj}% y no conviene apostar fuerte por ella. Medido como liquida Kalshi: cierre de cada ventana contra su apertura, no contra la vela siguiente.</p>
+            <p className="warn">⚠️ SEÑAL DÉBIL — Últimas {kalshiRecent.total} ventanas con señal clara de 15 min: la señal solo acertó {kalshiRecent.wins} ({Math.round(kalshiRecent.rate * 100)}%). Está fallando últimamente: el índice se bajó a {kalshiProbAdj} y no conviene apostar fuerte por ella. Medido como liquida Kalshi: cierre de cada ventana contra su apertura, no contra la vela siguiente.</p>
           )}
           {kalshiReasons.length > 0 && (
             <ul className="reasons">

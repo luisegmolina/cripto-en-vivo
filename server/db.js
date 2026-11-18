@@ -16,7 +16,15 @@ const hasPg = !!process.env.DATABASE_URL;
 let pool = null;
 if (hasPg) {
   const { Pool } = require('pg');
-  pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 5 });
+  // v15.2: ya no se desactiva la verificación del certificado. Si la URL
+  // trae sslmode, manda ella; si no, TLS con verificación. Solo para
+  // diagnosticar: DATABASE_SSL_INSECURE=1 vuelve al modo antiguo.
+  const pgSsl = () => {
+    if (process.env.DATABASE_SSL_INSECURE === '1') return { rejectUnauthorized: false };
+    if (/[?&]sslmode=/.test(process.env.DATABASE_URL)) return undefined;
+    return { rejectUnauthorized: true };
+  };
+  pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: pgSsl(), max: 5 });
   pool.on('error', (e) => console.log('[db] error del pool Postgres (se reintentará):', e.message));
 }
 
@@ -49,7 +57,8 @@ CREATE TABLE IF NOT EXISTS cev_user_data (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (user_id, kind)
 );
-CREATE INDEX IF NOT EXISTS cev_users_email_idx ON cev_users (email);`;
+CREATE INDEX IF NOT EXISTS cev_users_email_idx ON cev_users (email);
+ALTER TABLE cev_users ADD COLUMN IF NOT EXISTS token_valid_after TIMESTAMPTZ;`;
 
 function fileLoad() {
   if (fileDb) return fileDb;
@@ -139,11 +148,28 @@ async function setUserActive(id, active) {
 
 async function setUserPassword(id, passwordHash) {
   const n = Number(id);
-  if (hasPg) { await pool.query('UPDATE cev_users SET password_hash = $2 WHERE id = $1', [n, passwordHash]); return true; }
+  // v15.2: cambiar la contraseña invalida las sesiones (JWT) anteriores.
+  if (hasPg) { await pool.query('UPDATE cev_users SET password_hash = $2, token_valid_after = NOW() WHERE id = $1', [n, passwordHash]); return true; }
   const db = fileLoad();
   const u = db.users.find((x) => x.id === n);
   if (!u) return false;
   u.password_hash = passwordHash;
+  u.token_valid_after = new Date().toISOString();
+  fileSave();
+  return true;
+}
+
+// v15.2: cambia el rol y también invalida las sesiones anteriores
+// (si alguien se registró antes con el email del admin, su token deja de valer).
+async function setUserRole(id, role) {
+  const n = Number(id);
+  const r = role === 'admin' ? 'admin' : 'user';
+  if (hasPg) { await pool.query('UPDATE cev_users SET role = $2, token_valid_after = NOW() WHERE id = $1', [n, r]); return true; }
+  const db = fileLoad();
+  const u = db.users.find((x) => x.id === n);
+  if (!u) return false;
+  u.role = r;
+  u.token_valid_after = new Date().toISOString();
   fileSave();
   return true;
 }
@@ -230,7 +256,7 @@ async function setUserData(userId, kind, data) {
 
 module.exports = {
   init, hasPg, publicUser, createUser, getUserByEmail, getUserById, listUsers,
-  setUserActive, setUserPassword, countAdmins, setKalshiConnection,
+  setUserActive, setUserPassword, setUserRole, countAdmins, setKalshiConnection,
   getKalshiConnection, deleteKalshiConnection, setKalshiLastSync,
   getUserData, setUserData,
 };

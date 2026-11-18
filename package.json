@@ -10,6 +10,7 @@
     "dev": "concurrently -k -n server,client \"npm --prefix server run dev\" \"node wait-for-server.js && npm --prefix client run dev\"",
     "install:all": "npm install && npm --prefix server install --no-audit --no-fund && npm --prefix client install --no-audit --no-fund",
     "start": "npm --prefix server start",
+    "test": "node --test tests/analysis.test.mjs tests/server.test.mjs",
     "vercel-build": "npm run install:all && npm run build"
   },
   "version": "1.0.0",
@@ -18,6 +19,7 @@
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.3",
-    "pg": "^8.23.1"
+    "pg": "^8.23.1",
+    "ws": "^8.23.0"
   }
 }
