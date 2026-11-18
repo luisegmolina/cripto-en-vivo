@@ -277,6 +277,18 @@ ofrece un apodo local (sin contraseña, sin servidor).
   local" (sin contraseña, sin servidor), que se usa en la liga semanal
   y en la tarjeta para compartir. Nada se envía a ningún servidor.
 
+## Novedades v15: Referencia en vivo primero + corrección del promedio de 60 s (17-nov-2026)
+
+Pedido de Luis: que lo primero arriba sea la referencia en tiempo real (el valor de BTC de Kalshi, actualizándose lo más rápido posible) y sobre ella la predicción que avise si, según su posición y el valor, puede perder o no, y si es momento de sacar o de invertir más.
+
+1. **Referencia en tiempo real (§1)**: BRTI en vivo, precio objetivo de la ventana, diferencia en $ y % contra el objetivo, cuenta atrás y precio SÍ/NO en centavos. El BRTI se sondea cada 2 s y el mercado Kalshi cada 15 s (antes 3 s y 30 s).
+2. **Mi posición en vivo (§2)**: tu posición real (lado, apuesta SUBE/BAJA, precio medio, cantidad), P&L en vivo calculado con el BRTI actual, y aviso claro **VAS GANANDO / VAS PERDIENDO** y **PUEDES PERDER** si el BRTI está en contra de tu apuesta o cerca del objetivo en contra (a ≤30 $).
+3. **Decisión (§3)**: **SAL AHORA / AGUANTA / INVIERTE MÁS** — solo sugerencia educativa, nunca una orden. SAL si vas perdiendo y la señal va en contra o el contrato está ≤15¢; AGUANTA si vas ganando y la señal va a favor; INVIERTE MÁS solo si vas ganando, la señal es fuerte a favor y el contrato está barato (≤40¢), con aviso de que invertir más aumenta el riesgo. Sin posición abierta dice "sin posición abierta" y no inventa una decisión.
+4. **Señales del mercado (§4)**: veredicto SUBE/BAJA/ESPERAR 15m, fuerza, confianza y el porqué en simple. **5. Gráfica (§5)**: velas BTC 15m al final.
+5. **Corrección importante (Luis)**: Kalshi no liquida con el precio exacto del último segundo ni con el valor instantáneo que parpadea: liquida con el **promedio simple de 60 segundos del BRTI** medido justo antes del cierre. Ahora el ganar/perder, la diferencia contra el objetivo y la decisión se calculan **solo** con ese promedio; si no está, la pantalla lo dice y no usa el tick como si fuera el de liquidación. Se muestran ambos valores con etiqueta clara: **"BRTI ahora"** y **"Promedio de 60 s (el que liquida)"**. El objetivo es el promedio de 60 s antes de la apertura; el cierre se compara contra ese objetivo con el promedio de 60 s antes del cierre.
+
+Solo lectura, como siempre; la pantalla sigue siendo una sola, mínima; el backend no se toca. Pruebas: `tests-v15.mjs` (52).
+
 ## Novedades v14: Una sola pantalla — BRTI, objetivo, gráfica y señales (17-nov-2026)
 
 Pedido de Luis: limpia la pantalla, que solo se vean el precio actual de Kalshi, el precio objetivo, la gráfica y las señales, todo en una sola pantalla, y lo demás fuera.

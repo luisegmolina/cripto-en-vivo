@@ -69,11 +69,11 @@ ok('sin cuenta: botones Entrar / Crear cuenta en Kalshi', appSrc.includes("setSh
 console.log('— avisos sin duplicar —');
 ok('aviso solo lectura una sola vez', count(kcSrc, 'SOLO LECTURA: esta app nunca compra') === 1);
 ok('v14: aviso liquidación BRTI una sola vez, en la línea única', count(appSrc, 'liquida con el índice BRTI') === 1);
-ok('sin segundo aviso BRTI en KalshiConnect', !kcSrc.includes('BRTI'));
+ok('sin segundo aviso de liquidación BRTI en KalshiConnect (v15: el comentario interno no es un aviso)', !kcSrc.includes('líndice BRTI') && !kcSrc.includes('CF Benchmarks BRTI'));
 
 // 6. Versión.
 console.log('— versión —');
-ok('VERSION.txt empieza por v14', versionTxt.startsWith('v14'));
-ok('VERSION_LABEL v14 en App.jsx', appSrc.includes("VERSION_LABEL = 'v14"));
+ok('VERSION.txt empieza por v15', versionTxt.startsWith('v15'));
+ok('VERSION_LABEL v15 en App.jsx', appSrc.includes("VERSION_LABEL = 'v15"));
 
 console.log(`\ntests-v13.3: ${pass} pasaron`);

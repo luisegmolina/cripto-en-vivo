@@ -206,17 +206,22 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
       windowRemainingMs: remainingMs,
     });
   }
+  // v15: TODAS las abiertas suben al padre (no solo las que tienen
+  // decisión): la §2 MI POSICIÓN EN VIVO necesita lado, apuesta,
+  // precio medio y cantidad aunque falte el precio para decidir.
+  // decision puede ser null (sin precio medio o actual): el padre lo
+  // muestra como "sin dato", no lo inventa. avgPriceCents es el
+  // precio medio en centavos, para el P&L estimado según BRTI.
   const openDecisions = openPositions.map((pos) => {
     const decision = realDecisionFor(pos);
     const dir = pos.direction || deriveDir(pos);
-    return decision ? { ticker: pos.ticker, side: pos.side, dir, count: numOrNull(pos.count) || 0, currentPriceCents: numOrNull(pos.currentPrice), decision } : null;
-  }).filter(Boolean);
+    return { ticker: pos.ticker, side: pos.side, dir, count: numOrNull(pos.count) || 0, avgPriceCents: numOrNull(pos.avgPrice), currentPriceCents: numOrNull(pos.currentPrice), decision };
+  });
 
-  // v13.4: la decisión real sube al padre (App.jsx) para el banner
-  // justo debajo del veredicto, antes del formulario virtual. Solo
-  // se avisa cuando cambia (misma firma), para no re-renderizar en
-  // bucle con cada tick del precio.
-  const openDecisionsSig = JSON.stringify(openDecisions.map((d) => [d.ticker, d.decision.key, d.decision.priceRule, d.currentPriceCents]));
+  // v13.4: la decisión real sube al padre (App.jsx) para la §2 y la
+  // §3. Solo se avisa cuando cambia (misma firma), para no
+  // re-renderizar en bucle con cada tick del precio.
+  const openDecisionsSig = JSON.stringify(openDecisions.map((d) => [d.ticker, d.decision ? d.decision.key : null, d.decision ? d.decision.priceRule : null, d.currentPriceCents, d.avgPriceCents]));
   useEffect(() => {
     if (onRealDecisionRef.current) onRealDecisionRef.current(openDecisions);
   }, [openDecisionsSig]); // eslint-disable-line react-hooks/exhaustive-deps

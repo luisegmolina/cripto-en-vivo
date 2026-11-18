@@ -23,7 +23,7 @@ function check(name, ok, extra = '') {
 const mainReturn = app.slice(app.lastIndexOf('  return (\n    <div className="app">'));
 
 console.log('v14 — pantalla mínima: los 4 elementos presentes');
-check('1. Precio actual de Kalshi (BRTI en vivo)', mainReturn.includes('Valor actual Kalshi (BRTI)'));
+check('1. Precio actual de Kalshi (BRTI en vivo)', mainReturn.includes('BRTI ahora'));
 check('1b. BRTI: promedio 60 s y hora de actualización', mainReturn.includes('Promedio de 60 s') && mainReturn.includes('Actualizado:'));
 check('2. Precio objetivo de Kalshi', mainReturn.includes('Precio objetivo (Kalshi)'));
 check('3. Gráfica BTC 15m con el contenedor del gráfico', mainReturn.includes('Gráfica · BTC 15m') && mainReturn.includes('<div ref={chartRef} className="chart" />'));
@@ -31,7 +31,7 @@ check('3b. Gráfica sin botones de intervalo (siempre 15m)', !mainReturn.include
 check('3c. Gráfica sin toggles EMA/Bollinger/RSI en la vista', !mainReturn.includes('EMA 20/50') && !mainReturn.includes('Bollinger') && !mainReturn.includes('RSI (panel)'));
 check('4. Señales: veredicto SUBE/BAJA/ESPERAR', mainReturn.includes('verdict-main') && mainReturn.includes('kalshiVerdict'));
 check('4b. Señales: ¿Cobro o me quedo?', mainReturn.includes('¿Cobro o me quedo?'));
-check('4c. Señales: banner de decisión real por precio del contrato', mainReturn.includes('realDecisions.length > 0') && mainReturn.includes('Tu posición real en Kalshi') && mainReturn.includes('decision.label'));
+check('4c. Señales: decisión real en §3 por precio del contrato (v15)', mainReturn.includes('3 · Decisión') && mainReturn.includes('liveDecisionNow') && mainReturn.includes('Tu posición:'));
 
 console.log('v14 — lo demás ELIMINADO de la vista');
 const gone = [
@@ -84,8 +84,8 @@ check('dist/index.html existe y referencia un bundle', Boolean(bundleMatch));
 if (bundleMatch) {
   const bundle = readFileSync(path.join(ROOT, 'client/dist/assets', bundleMatch[1]), 'utf8');
   check('bundle distinto al de v13.5 (index-BJtnnrQL.js)', bundleMatch[1] !== 'index-BJtnnrQL.js');
-  check('bundle trae la etiqueta v14', bundle.includes('v14'));
-  check('bundle trae el BRTI en vivo', bundle.includes('Valor actual Kalshi'));
+  check('bundle trae la etiqueta v15', bundle.includes('v15'));
+  check('bundle trae el BRTI en vivo', bundle.includes('BRTI ahora'));
   check('bundle trae la gráfica 15m', bundle.includes('Gráfica'));
   check('bundle NO trae la navegación por pestañas', !bundle.includes('app-tabs') && !bundle.includes('Gráfico y señal'));
   check('bundle NO trae la liga ni la cartera virtual', !bundle.includes('Liga semanal') && !bundle.includes('Cartera virtual'));

@@ -6,7 +6,7 @@ import { fearGreedEstimate, heatToday, isoWeekKey, rivalsForWeek } from './marke
 import { backtestSignal } from './backtest.js';
 import { evaluateWindowSignal, backtestWindowSignal } from './windowOutcome.js';
 import { multiTfVerdict, reasonsFor, tradePlan, signalHistory, atr, VERDICT_TFS } from './verdict.js';
-import { KALSHI_WINDOW_MS, window15m, fmtClock, fmtCountdown, kalshiVerdictForScore, strengthForScore, estimatedProb, adjustProbForRecent, recentWinRate, cashOutDecision, suggestedExitPrice, brtiWinning } from './kalshi.js';
+import { KALSHI_WINDOW_MS, window15m, fmtClock, fmtCountdown, kalshiVerdictForScore, strengthForScore, estimatedProb, adjustProbForRecent, recentWinRate, cashOutDecision, suggestedExitPrice, brtiPositionOutcome, estimateSettlementPnl, liveDecision } from './kalshi.js';
 import { MISSIONS, levelForXp, xpIntoLevel, XP_PER_LEVEL } from './missions.js';
 import { screenOpportunities } from './screener.js';
 import { shouldFireAlert, shouldSignalAlert, ALERT_COOLDOWN_MS, dedupePriceAlerts } from './alerts.js';
@@ -25,7 +25,7 @@ const ASSETS = [
 const INTERVALS = ['1m', '5m', '15m', '1h', '6h', '1d'];
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v14 — Una sola pantalla: BRTI, objetivo, gráfica y señales';
+const VERSION_LABEL = 'v15 — Referencia en vivo primero: BRTI, tu posición, decisión, señales, gráfica';
 
 const ACHIEVEMENTS = [
   { id: 'primera_operacion', name: 'Primera operación virtual', desc: 'Compra o vende por primera vez con dinero virtual.' },
@@ -502,17 +502,27 @@ export default function App() {
   const kalshiTargetPrice = kalshiMarket && kalshiMarket.source === 'kalshi' ? kalshiMarket.targetPrice : null;
   const kalshiRefPrice = kalshiTargetPrice ?? kalshiCandleOpen;
   const kalshiRefSource = kalshiTargetPrice != null ? 'kalshi' : 'coinbase';
-  // v13.5: ¿vas GANANDO o PERDIENDO según el BRTI de Kalshi? Se
-  // decide contra el promedio de 60 s (el que liquida) para tu
-  // primera posición real abierta; sin posición real, brtiRef es
-  // null y la UI solo muestra si el BRTI está por encima o por
-  // debajo del objetivo. Función pura (kalshi.js), nunca inventa.
-  const brtiRef = brtiWinning({
-    dir: realDecisions.length ? realDecisions[0].dir : null,
+  // v15: ¿vas GANANDO o PERDIENDO según el BRTI de Kalshi? Se decide
+  // contra el promedio de 60 s (el que liquida) para tu primera
+  // posición real abierta CON decisión; sin posición, no hay
+  // decisión que tomar y la UI lo dice ("sin posición abierta").
+  // Funciones puras (kalshi.js): brtiPositionOutcome añade "cerca
+  // de la línea" (≤30 $ del objetivo) y liveDecision da SAL AHORA /
+  // AGUANTA / INVIERTE MÁS. Nunca se inventa un resultado.
+  const brtiArgs = {
     targetPrice: kalshiTargetPrice,
     avg60s: brti && brti.source === 'kalshi' ? brti.avg60s : null,
     value: brti && brti.source === 'kalshi' ? brti.value : null,
-  });
+  };
+  // v15 + CORRECCIÓN: referencia BRTI-objetivo SOLO con el promedio
+  // de 60 s (el que liquida). Si no hay promedio, null: el tick
+  // instantáneo NO se usa para la diferencia ni para ganar/perder.
+  const brtiRefPrice = brti && brti.source === 'kalshi' && brti.avg60s != null ? brti.avg60s : null;
+  const brtiDiff = brtiRefPrice != null && kalshiTargetPrice ? brtiRefPrice - kalshiTargetPrice : null;
+  const brtiDiffPct = brtiDiff != null && kalshiTargetPrice ? (brtiDiff / kalshiTargetPrice) * 100 : null;
+  const firstRealDecision = realDecisions.find((d) => d.decision) || null;
+  const firstOutcome = firstRealDecision ? brtiPositionOutcome({ dir: firstRealDecision.dir, ...brtiArgs }) : null;
+  const liveDecisionNow = firstRealDecision ? liveDecision({ winning: firstOutcome ? firstOutcome.winning : null, signalKey: kalshiVerdict.key, signalScore: kalshiScore, dir: firstRealDecision.dir, contractCents: firstRealDecision.currentPriceCents }) : null;
   const kalshiWinChangePct = (kalshiRefPrice && kalshiPrice) ? ((kalshiPrice - kalshiRefPrice) / kalshiRefPrice) * 100 : null;
   const kalshiAtr = useMemo(() => atr(candles15m), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // v13.4: la medida 15m es la de KALSHI (windowOutcome.js): cierre
@@ -558,8 +568,9 @@ export default function App() {
     return ticker?.price ?? markets.find((m) => m.symbol === symbol)?.price ?? null;
   }
   // v13.2: mercado actual de Kalshi (precio objetivo + SÍ/NO), cada
-  // 30 s. Es el precio contra el que se liquida la ventana. Si Kalshi
-  // falla, el servidor responde source 'coinbase' y la pestaña usa el
+  // 15 s (el servidor cachea 15 s: el sondeo coincide con la caché).
+  // Es el precio contra el que se liquida la ventana. Si Kalshi
+  // falla, el servidor responde source 'coinbase' y la pantalla usa el
   // precio de Coinbase con aviso, nunca en blanco.
   useEffect(() => {
     if (symbol !== 'BTC') { setKalshiMarket(null); return; }
@@ -571,16 +582,18 @@ export default function App() {
       } catch { if (alive) setKalshiMarket({ source: 'coinbase', targetPrice: null }); }
     };
     load();
-    const t = setInterval(load, 30000);
+    const t = setInterval(load, 15000);
     return () => { alive = false; clearInterval(t); };
   }, [symbol]);
 
-  // v13.5: valor BRTI en vivo de Kalshi, cada 3 s con la pestaña
-  // Kalshi activa y sesión iniciada. El endpoint solo lee el último
-  // tick que el servidor guarda del WebSocket; si no hay Kalshi
-  // conectado, responde connected:false y NO se abre ninguna
-  // conexión a Kalshi. Si el token caducó, apiAuth lanza y se cae a
-  // Coinbase con aviso (la sesión se limpia en el efecto de /me).
+  // v13.5: valor BRTI en vivo de Kalshi, cada 2 s con la pantalla
+  // activa y sesión iniciada (v15: de 3 s a 2 s, lo más rápido que
+  // pide Luis para la referencia y la posición en vivo). El endpoint
+  // solo lee el último tick que el servidor guarda del WebSocket; si
+  // no hay Kalshi conectado, responde connected:false y NO se abre
+  // ninguna conexión a Kalshi. Si el token caducó, apiAuth lanza y
+  // se cae a Coinbase con aviso (la sesión se limpia en el efecto
+  // de /me).
   useEffect(() => {
     if (activeTab !== 'kalshi' || symbol !== 'BTC' || !user) { setBrti(null); return; }
     let alive = true;
@@ -591,7 +604,7 @@ export default function App() {
       } catch { if (alive) setBrti({ source: 'coinbase', value: null, status: 'error', error: 'No se pudo leer el BRTI del servidor.' }); }
     };
     load();
-    const t = setInterval(load, 3000);
+    const t = setInterval(load, 2000);
     return () => { alive = false; clearInterval(t); };
   }, [activeTab, symbol, user]);
 
@@ -1323,6 +1336,7 @@ export default function App() {
 
         <section className={`card verdict-card kalshi-card verdict-${kalshiVerdict.key === 'up' ? 'buy' : kalshiVerdict.key === 'down' ? 'sell' : 'wait'}`} aria-label="Modo Kalshi 15 minutos">
           <p className="verdict-kicker">MODO KALSHI 15 MIN · {symbol} · VENTANA DE 15 MINUTOS · EDUCATIVO, NO ES RECOMENDACIÓN DE APUESTA</p>
+          <h2>1 · Referencia en tiempo real — BTC · ventana 15 min</h2>
           <div className="stats">
             <div><span>Ventana actual</span><b>{fmtClock(kalshiWin.startMs)} – {fmtClock(kalshiWin.endMs)}</b></div>
             <div><span>Cierra en</span><b className="countdown">{fmtCountdown(kalshiWin.remainingMs)}</b></div>
@@ -1332,6 +1346,7 @@ export default function App() {
           <div className="score-bar" aria-hidden="true"><div style={{ width: `${kalshiWin.elapsedPct}%`, background: '#f59e0b' }} /></div>
           <p className="muted">Ventana {Math.round(kalshiWin.elapsedPct)}% transcurrida. Al cerrar, la predicción se resuelve: ¿el precio terminó por encima o por debajo del precio objetivo de Kalshi?</p>
           <p className="muted">Precio objetivo de Kalshi: es el precio contra el que se liquida esta ventana (mercado {kalshiMarket && kalshiMarket.ticker ? kalshiMarket.ticker : 'KXBTC15M'}). El precio SÍ/NO es lo que cuesta el contrato en Kalshi en centavos, no la probabilidad de acierto de la señal de esta app.</p>
+          <p className="muted">Cómo liquida Kalshi: el objetivo es el promedio de 60 s antes de la apertura; el cierre se compara contra ese objetivo con el promedio de 60 s antes del cierre. El valor instantáneo que parpadea no liquida.</p>
           {kalshiRefSource !== 'kalshi' && (
             <p className="warn">⚠️ Precio de referencia de Coinbase, no de Kalshi: la API pública de Kalshi no devolvió el mercado actual, así que la referencia es la apertura de la vela 15m de Coinbase.</p>
           )}
@@ -1351,35 +1366,98 @@ export default function App() {
           {brti == null ? (
             <p className="muted">Cargando valor en vivo de Kalshi (BRTI)…</p>
           ) : brti.source === 'kalshi' && brti.value != null ? (
-            <div className="signal" style={{ borderColor: brtiRef && brtiRef.winning ? '#22c55e' : brtiRef && !brtiRef.winning ? '#ef4444' : '#94a3b8' }}>
-              <b style={{ fontSize: 26 }}>Valor actual Kalshi (BRTI): {fmt(brti.value, currency)}</b>
-              <span>Promedio de 60 s (el que liquida): <b>{brti.avg60s != null ? fmt(brti.avg60s, currency) : '— (aún no disponible, se usa el valor en vivo)'}</b>{brti.avg15mFinal != null && (<> · Promedio final de la ventana: <b>{fmt(brti.avg15mFinal, currency)}</b></>)}</span>
-              {kalshiTargetPrice && brtiRef && (
-                <span>Diferencia contra el objetivo {fmt(kalshiTargetPrice, currency)}: <b className={brtiRef.diff >= 0 ? 'up' : 'down'}>{brtiRef.diff >= 0 ? '+' : '−'}{fmt(Math.abs(brtiRef.diff), currency)} ({brtiRef.diffPct >= 0 ? '+' : ''}{brtiRef.diffPct.toFixed(3)}%)</b> · referencia: {brtiRef.refLabel === 'avg60s' ? 'promedio de 60 s' : 'valor en vivo'}</span>
+            <div className="signal" style={{ borderColor: brtiDiff != null && brtiDiff >= 0 ? '#22c55e' : brtiDiff != null ? '#ef4444' : '#94a3b8' }}>
+              <b style={{ fontSize: 26 }}>BRTI ahora: {fmt(brti.value, currency)}</b>
+              <span>Promedio de 60 s (el que liquida): <b>{brti.avg60s != null ? fmt(brti.avg60s, currency) : '— (aún no disponible: sin promedio no se puede saber si vas ganando; el valor instantáneo no liquida)'}</b>{brti.avg15mFinal != null && (<> · Promedio final de la ventana: <b>{fmt(brti.avg15mFinal, currency)}</b></>)}</span>
+              {kalshiTargetPrice && brtiDiff != null && (
+                <span>Diferencia contra el objetivo {fmt(kalshiTargetPrice, currency)}: <b className={brtiDiff >= 0 ? 'up' : 'down'}>{brtiDiff >= 0 ? '+' : '−'}{fmt(Math.abs(brtiDiff), currency)} ({brtiDiffPct >= 0 ? '+' : ''}{brtiDiffPct.toFixed(3)}%)</b> · referencia: promedio de 60 s</span>
               )}
-              {realDecisions.length > 0 && brtiRef ? (
-                <span><b style={{ color: brtiRef.winning ? '#22c55e' : '#ef4444' }}>{brtiRef.winning ? '✓ Vas GANANDO según BRTI' : '✗ Vas PERDIENDO según BRTI'}</b> — tu posición {realDecisions[0].ticker} ({realDecisions[0].dir === 'up' ? 'SUBE' : 'BAJA'}) contra el objetivo, por el promedio de 60 s de Kalshi, no por Coinbase.</span>
-              ) : kalshiTargetPrice && brtiRef ? (
-                <span className="muted">El BRTI está {brtiRef.diff >= 0 ? 'por ENCIMA' : 'por DEBAJO'} del objetivo: si apostaste a que SUBE, {brtiRef.diff >= 0 ? 'vas ganando' : 'vas perdiendo'}; si apostaste a que BAJA, al revés.</span>
-              ) : null}
+              {kalshiTargetPrice && brtiDiff == null && (
+                <span className="muted">Promedio de 60 s no disponible: sin él no se puede saber si vas ganando ni la diferencia contra el objetivo. El valor instantáneo de arriba no liquida.</span>
+              )}
               <span className="muted">Fuente: índice BRTI en vivo por WebSocket de Kalshi (canal cfbenchmarks_value), con tu clave ya conectada. Actualizado: {brti.updatedAt ? new Date(brti.updatedAt).toLocaleTimeString('es-US', { hour12: false }) : '—'}{brti.stale ? ' · ⚠️ Dato con más de 15 s: puede estar desactualizado.' : ''}</span>
             </div>
           ) : (
-            <p className="warn">⚠️ Precio de Coinbase, no de Kalshi (BRTI): {user ? (brti.status === 'error' ? `el WebSocket de Kalshi no está dando el valor (${brti.error || 'sin dato'})` : 'aún no llega el primer tick de Kalshi') : 'entra con tu cuenta y conecta Kalshi para ver el valor en vivo que liquida'} — el precio de arriba es de Coinbase y puede diferir del de liquidación.</p>
+            <div className="signal" style={{ borderColor: '#f59e0b' }}>
+              <b style={{ fontSize: 22 }}>⚠️ Sin valor en vivo de Kalshi</b>
+              <span>{user ? (brti.status === 'error' ? `El WebSocket de Kalshi no está dando el valor (${brti.error || 'sin dato'})` : 'Aún no llega el primer tick de Kalshi') : 'Entra con tu cuenta y conecta Kalshi para ver el valor en vivo que liquida'} — se muestra el precio de Coinbase mientras tanto.</span>
+              <span>Precio de Coinbase ahora: <b>{kalshiPrice ? fmt(kalshiPrice, currency) : '—'}</b> · puede diferir del de liquidación (BRTI).</span>
+              <span className="muted">Actualizado: {brti.updatedAt ? new Date(brti.updatedAt).toLocaleTimeString('es-US', { hour12: false }) : '—'}</span>
+            </div>
           )}
 
-          {/* v14: GRÁFICA — velas BTC 15m, siempre en la pantalla.
-              Sin botones de intervalo (siempre 15m), sin toggles de
-              indicadores, sin pantalla completa ni panel RSI. Solo
-              las velas y "Cargando velas…" si aún no llegaron. */}
-          <section className="card">
-            <div className="row"><h2>Gráfica · BTC 15m</h2></div>
-            <div ref={chartRef} className="chart" />
-            {candles.length === 0 && (
-              <p className="muted">{candlesError ? `Sin velas: ${candlesError}` : 'Cargando velas…'}</p>
-            )}
-          </section>
 
+          {/* v15: §2 MI POSICIÓN EN VIVO — justo debajo de la
+              referencia. El P&L se recalcula con cada tick BRTI
+              (cada 2 s); las posiciones se refrescan cada 30 s
+              (KalshiConnect). P&L estimado = liquidación si la
+              ventana cerrara ahora según BRTI ($1 si vas ganando,
+              $0 si vas perdiendo, menos el precio medio, por
+              contrato). El P&L "si vendes ahora" es el del precio
+              del contrato, lo que Kalshi te pagaría hoy. */}
+          <h2>2 · Mi posición en vivo</h2>
+          {!user ? (
+            <p className="muted">Entra con tu cuenta y conecta Kalshi para ver tu posición en vivo aquí.</p>
+          ) : realDecisions.length === 0 ? (
+            <p className="muted">Sin posición abierta en Kalshi ahora mismo: no hay nada que vigilar. Cuando abras una, aparecerá aquí con su P&L en vivo.</p>
+          ) : (
+            <div>
+              {realDecisions.map((d, i) => {
+                const out = brtiPositionOutcome({ dir: d.dir, ...brtiArgs });
+                const pnlEst = estimateSettlementPnl({ dir: d.dir, ...brtiArgs, avgPriceCents: d.avgPriceCents, count: d.count });
+                const canLose = out && (!out.winning || out.nearLine);
+                return (
+                  <div key={`${d.ticker || ''}-${i}`} className="signal" style={{ borderColor: out ? (out.winning ? '#22c55e' : '#ef4444') : '#94a3b8' }}>
+                    <b>{d.ticker || '—'} — {d.side === 'yes' ? 'SÍ' : d.side === 'no' ? 'NO' : '—'} · Apuesta: {d.dir === 'up' ? '▲ SUBE' : d.dir === 'down' ? '▼ BAJA' : '—'}</b>
+                    <span>Precio medio: {d.avgPriceCents != null ? `${d.avgPriceCents}¢` : '—'} · Cantidad: {d.count} contrato(s) · Precio actual del contrato: {d.currentPriceCents != null ? `${d.currentPriceCents}¢` : '—'}</span>
+                    {pnlEst ? (
+                      <span>P&L estimado si la ventana cerrara ahora según BRTI: <b className={pnlEst.pnlUsd >= 0 ? 'up' : 'down'}>{pnlEst.pnlUsd >= 0 ? '+' : ''}{fmt(pnlEst.pnlUsd, 'USD')}</b> · el contrato valdría ${pnlEst.estValueCents / 100} si liquida así</span>
+                    ) : (
+                      <span className="muted">Sin P&L estimado: falta el promedio de 60 s, el objetivo o el precio medio. El valor instantáneo no liquida.</span>
+                    )}
+                    {d.decision && d.decision.pnl != null && (
+                      <span>Si vendes ahora en Kalshi (precio del contrato): <b className={d.decision.pnl >= 0 ? 'up' : 'down'}>{d.decision.pnl >= 0 ? '+' : ''}{fmt(d.decision.pnl, 'USD')}</b></span>
+                    )}
+                    {out ? (
+                      <span><b style={{ color: out.winning ? '#22c55e' : '#ef4444' }}>{out.winning ? '✓ VAS GANANDO según BRTI' : '✗ VAS PERDIENDO según BRTI'}</b>{canLose && (<span> · <b>⚠️ PUEDES PERDER</b>: {out.winning ? 'estás a menos de $30 del objetivo y la ventana puede darse la vuelta' : 'el BRTI está en tu contra'}</span>)}</span>
+                    ) : (
+                      <span className="muted">Sin promedio de 60 s: no se puede saber si vas ganando o perdiendo. El valor instantáneo no liquida y no se usa para decidir.</span>
+                    )}
+                    {!d.decision && (
+                      <span className="muted">Sin decisión por precio del contrato: falta el precio medio o el actual — comprueba la posición en Kalshi.</span>
+                    )}
+                  </div>
+                );
+              })}
+              <p className="muted">Posiciones actualizadas cada 30 s; el P&L se recalcula con cada tick BRTI (cada 2 s).</p>
+            </div>
+          )}
+
+          {/* v15: §3 DECISIÓN — SAL AHORA / AGUANTA / INVIERTE MÁS.
+              Sugerencia educativa, nunca una orden: la app no opera
+              por ti. Reglas en kalshi.js (liveDecision): contrato
+              ≤15¢ o BRTI + señal en contra -> SAL; ganando + señal
+              fuerte a favor + contrato ≤40¢ -> INVIERTE MÁS (con
+              aviso de más riesgo); ganando + señal a favor -> AGUANTA;
+              resto -> AGUANTA CON CUIDADO. */}
+          <h2>3 · Decisión</h2>
+          {!user ? (
+            <p className="muted">Entra y conecta Kalshi para que la app te diga si salir, aguantar o invertir más según tu posición.</p>
+          ) : !firstRealDecision ? (
+            <p className="muted">Sin posición abierta en Kalshi ahora mismo: no hay decisión que tomar. Cuando abras una, aparecerá aquí.</p>
+          ) : liveDecisionNow ? (
+            <div className="signal" style={{ borderColor: liveDecisionNow.color }}>
+              <b style={{ color: liveDecisionNow.color, fontSize: 26 }}>{liveDecisionNow.label}</b>
+              <span>{liveDecisionNow.reason}</span>
+              <span>Tu posición: <b>{firstRealDecision.ticker} — {firstRealDecision.side === 'yes' ? 'SÍ' : firstRealDecision.side === 'no' ? 'NO' : '—'} ({firstRealDecision.count} contrato(s), {firstRealDecision.currentPriceCents}¢ ahora)</b></span>
+              {liveDecisionNow.key === 'add' && (
+                <span className="warn">⚠️ Invertir más aumenta el riesgo: si la ventana se da la vuelta, pierdes más de lo que llevas. Solo con dinero que te sobre.</span>
+              )}
+              <span className="muted">Sugerencia educativa, nunca una orden: la app no opera por ti. Decide y opera tú en Kalshi.</span>
+            </div>
+          ) : null}
+
+          <h2>4 · Señales del mercado</h2>
           <div className="verdict-main">
             <div className="verdict-word">{kalshiVerdict.icon} {kalshiVerdict.label}{kalshiWeakSignal && (<span> · ⚠️ SEÑAL DÉBIL</span>)}</div>
             <div className="verdict-meta">
@@ -1398,22 +1476,6 @@ export default function App() {
                 <li key={i} className={`reason-${r.dir}`}><b>{r.icon}</b> {r.text}</li>
               ))}
             </ul>
-          )}
-
-          {/* v13.4: decisión de tu posición REAL abierta, al frente:
-              justo debajo del veredicto y antes del formulario virtual.
-              La tabla de abajo (§3) la repite con el detalle; aquí va
-              el resumen para decidir en segundos. */}
-          {realDecisions.length > 0 && (
-            <div className="signal" style={{ borderColor: realDecisions[0].decision.color }}>
-              <b style={{ color: realDecisions[0].decision.color, fontSize: 26 }}>{realDecisions[0].decision.label}</b>
-              <span><b>Tu posición real en Kalshi: {realDecisions[0].ticker} — {realDecisions[0].side === 'yes' ? 'SÍ' : realDecisions[0].side === 'no' ? 'NO' : '—'} ({realDecisions[0].count} contrato(s), {realDecisions[0].currentPriceCents}¢ ahora)</b></span>
-              <span>{realDecisions[0].decision.title}</span>
-              {realDecisions.length > 1 && (
-                <span>Otras abiertas: {realDecisions.slice(1).map((d) => `${d.ticker}: ${d.decision.label} (${d.currentPriceCents}¢)`).join(' · ')}</span>
-              )}
-              <span className="muted">Solo lectura: la app no cobra ni sale por ti — decide y opera tú en Kalshi. Detalle en §3 Mis posiciones.</span>
-            </div>
           )}
 
           <h3>¿Cobro o me quedo?</h3>
@@ -1441,9 +1503,25 @@ export default function App() {
           </div>
           <p className="muted">Regla simple: si vas ganando y la señal se dio la vuelta, cobra. Si vas perdiendo y la señal va en tu contra, sal. Si la señal sigue a tu favor, aguanta hasta el cierre de la ventana. Todo virtual: nada de esto mueve dinero real ni tu cuenta de Kalshi.</p>
 
+          {/* v15: §5 GRÁFICA — velas BTC 15m, al final. Sin botones
+              de intervalo (siempre 15m), sin toggles de
+              indicadores, sin pantalla completa ni panel RSI. Solo
+              las velas y "Cargando velas…" si aún no llegaron. */}
+              Sin botones de intervalo (siempre 15m), sin toggles de
+              indicadores, sin pantalla completa ni panel RSI. Solo
+              las velas y "Cargando velas…" si aún no llegaron. */}
+          <section className="card">
+            <div className="row"><h2>5 · Gráfica · BTC 15m</h2></div>
+            <div ref={chartRef} className="chart" />
+            {candles.length === 0 && (
+              <p className="muted">{candlesError ? `Sin velas: ${candlesError}` : 'Cargando velas…'}</p>
+            )}
+          </section>
+
+
           {/* v14: MI CUENTA KALSHI discreta — solo un <details>.
               KalshiConnect en modo mínimo: sigue cargando las
-              posiciones y subiendo la decisión real al banner,
+              posiciones y subiendo la decisión real a la §2 y §3,
               pero NO muestra la tabla ni el historial. Sin
               sesión, solo los botones de entrar/crear cuenta. */}
           <details className="account-details">

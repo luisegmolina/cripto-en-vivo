@@ -136,18 +136,24 @@ export function cashOutDecision({ dir, entryPrice, currentPrice, amount, signalK
   return { key: 'wait', label: 'ESPERA', title: 'Espera', text: 'No hay una decisión clara por la señal. Espera a que se defina la ventana.', pnl, pnlPct, color: '#94a3b8' };
 }
 
-// v13.5: valor en vivo de Kalshi (BRTI) por WebSocket del servidor
-// (canal cfbenchmarks_value, índice BRTI). La liquidación usa el
-// PROMEDIO DE 60 SEGUNDOS del BRTI, así que "vas ganando" se decide
-// contra ese promedio cuando lo hay, y contra el valor en vivo si
-// no. Pyth NO liquida KXBTC15M: no se usa aquí. El WS de Kalshi
-// exige autenticación en el handshake, por eso lo abre el servidor
-// con tu clave ya conectada y el navegador solo sondea
-// GET /api/kalshi/brti: tu clave nunca sale del servidor.
+// v13.5 + CORRECCIÓN v15: valor en vivo de Kalshi (BRTI) por
+// WebSocket del servidor (canal cfbenchmarks_value, índice BRTI).
+// Kalshi liquida con el PROMEDIO SIMPLE DE 60 SEGUNDOS del BRTI
+// medido justo antes del cierre — NUNCA con el precio exacto del
+// último segundo ni con el valor instantáneo que parpadea en
+// pantalla. Por eso esta función SOLO usa avg60s: si el promedio no
+// está disponible, devuelve null y la UI lo dice, en vez de usar el
+// tick instantáneo como si fuera el de liquidación. El parámetro
+// `value` (tick instantáneo) se acepta por compatibilidad pero se
+// IGNORA a propósito: solo sirve para mostrarlo en pantalla con la
+// etiqueta "BRTI ahora", nunca para decidir. Pyth NO liquida
+// KXBTC15M: no se usa aquí. El WS de Kalshi exige autenticación en
+// el handshake, por eso lo abre el servidor con tu clave ya
+// conectada y el navegador solo sondea GET /api/kalshi/brti.
 // Regla de liquidación: SÍ gana si el promedio final es MAYOR O
 // IGUAL que el objetivo (por eso >=, no >).
-// Devuelve null si falta el objetivo, la dirección o el precio de
-// referencia. Nunca inventa un resultado.
+// Devuelve null si falta el objetivo, la dirección o el promedio
+// de 60 s. Nunca inventa un resultado.
 export function brtiWinning({ dir, targetPrice, avg60s, value }) {
   // OJO: Number(null) es 0, así que un promedio ausente NO se puede
   // convertir con Number() directo: un null se volvería 0 y la
@@ -156,14 +162,81 @@ export function brtiWinning({ dir, targetPrice, avg60s, value }) {
   const numOrNull = (v) => (v == null || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
   const target = numOrNull(targetPrice);
   const avg = numOrNull(avg60s);
-  const live = numOrNull(value);
-  const ref = avg != null ? avg : live;
-  if (!dir || target == null || target <= 0 || ref == null) return null;
-  const refLabel = avg != null ? 'avg60s' : 'value';
-  const winning = dir === 'up' ? ref >= target : dir === 'down' ? ref < target : null;
+  // CORRECCIÓN v15: sin promedio de 60 s NO hay resultado. El tick
+  // instantáneo (`value`) no se usa: no liquida.
+  if (!dir || target == null || target <= 0 || avg == null) return null;
+  const refLabel = 'avg60s';
+  const winning = dir === 'up' ? avg >= target : dir === 'down' ? avg < target : null;
   if (winning == null) return null;
-  const diff = ref - target;
-  return { ref, refLabel, winning, diff, diffPct: (diff / target) * 100 };
+  const diff = avg - target;
+  return { ref: avg, refLabel, winning, diff, diffPct: (diff / target) * 100 };
+}
+
+// v15: resultado de UNA posición real según el PROMEDIO DE 60 S
+// del BRTI (el número que liquida, nunca el tick instantáneo). Es
+// brtiWinning + "cerca de la línea": si el promedio está a ≤30 $
+// del objetivo, la ventana puede darse la vuelta con un movimiento
+// pequeño (PUEDES PERDER aunque ahora vayas ganando). Devuelve null
+// si falta objetivo, dirección o promedio. Nunca inventa un resultado.
+export function brtiPositionOutcome({ dir, targetPrice, avg60s, value, nearUsd = 30 }) {
+  const base = brtiWinning({ dir, targetPrice, avg60s, value });
+  if (!base) return null;
+  return { ...base, nearLine: Math.abs(base.diff) <= nearUsd, nearUsd };
+}
+
+// v15: P&L ESTIMADO de liquidación según el PROMEDIO DE 60 S del
+// BRTI actual. Si la ventana cerrara AHORA con ese promedio, el
+// contrato valdría $1 si vas ganando y $0 si vas perdiendo: P&L =
+// (valor estimado − precio medio) × cantidad. Es una ESTIMACIÓN de
+// liquidación, no lo que Kalshi te pagaría si vendes ahora (eso es
+// el precio del contrato, que va aparte). Sin promedio de 60 s,
+// devuelve null: el valor instantáneo no se usa.
+// Devuelve null sin objetivo, dirección, promedio, precio medio
+// o cantidad. Nunca inventa un resultado.
+export function estimateSettlementPnl({ dir, targetPrice, avg60s, value, avgPriceCents, count }) {
+  const outcome = brtiPositionOutcome({ dir, targetPrice, avg60s, value });
+  const avg = avgPriceCents == null || avgPriceCents === '' ? null : Number(avgPriceCents);
+  const n = Number(count);
+  if (!outcome || avg == null || !Number.isFinite(avg) || avg <= 0 || avg > 100 || !Number.isFinite(n) || n <= 0) return null;
+  const estValueCents = outcome.winning ? 100 : 0;
+  return { ...outcome, estValueCents, pnlUsd: ((estValueCents - avg) * n) / 100 };
+}
+
+// v15: DECISIÓN en vivo para tu posición real: SAL AHORA / AGUANTA /
+// INVIERTE MÁS (sugerencia educativa, nunca una orden: la app no
+// opera por ti). Reglas de Luis, en orden:
+// 1. Contrato a ≤15¢ -> SAL AHORA (casi perdido, lo diga el BRTI o no).
+// 2. BRTI en tu contra + señal en contra -> SAL AHORA.
+// 3. Vas ganando + señal en contra -> SAL AHORA con la ganancia.
+// 4. Vas ganando + señal FUERTE a favor (|score| ≥ 40) + contrato
+//    barato (≤40¢) -> INVIERTE MÁS (con aviso: más riesgo).
+// 5. Vas ganando + señal a favor -> AGUANTA.
+// 6. Todo lo demás (mixto o sin BRTI en vivo) -> AGUANTA CON CUIDADO.
+// Sin posición abierta la UI dice "sin posición abierta" y no llama
+// a esta función: aquí nunca se inventa una decisión.
+export function liveDecision({ winning, signalKey, signalScore, dir, contractCents }) {
+  const favors = signalFavorsPosition(dir, signalKey);
+  const strongFavor = favors === 'favors' && signalScore != null && Math.abs(signalScore) >= 40;
+  const cur = contractCents == null || contractCents === '' ? null : Number(contractCents);
+  if (cur != null && Number.isFinite(cur) && cur <= 15) {
+    return { key: 'exit', label: 'SAL AHORA', color: '#ef4444', reason: `Tu lado vale solo ${cur}¢ de $1: está casi perdido. Salir ahora limita la pérdida en vez de esperar a que cierre en $0.` };
+  }
+  if (winning === false && favors === 'against') {
+    return { key: 'exit', label: 'SAL AHORA', color: '#ef4444', reason: 'El BRTI va en tu contra y la señal de 15 minutos también. La ventana juega en contra: salir ahora limita la pérdida.' };
+  }
+  if (winning === true && favors === 'against') {
+    return { key: 'exit', label: 'SAL AHORA', color: '#22c55e', reason: 'Vas ganando, pero la señal de 15 minutos se dio la vuelta. Salir ahora asegura la ganancia antes de que el giro se la coma.' };
+  }
+  if (winning === true && strongFavor && cur != null && Number.isFinite(cur) && cur <= 40) {
+    return { key: 'add', label: 'INVIERTE MÁS', color: '#22c55e', reason: `Vas ganando, la señal está fuerte a tu favor (puntuación ${signalScore}) y el contrato está barato (${cur}¢). Solo si te sobra: invertir más aumenta el riesgo — si la ventana se da la vuelta, pierdes más.` };
+  }
+  if (winning === true && favors === 'favors') {
+    return { key: 'hold', label: 'AGUANTA', color: '#22c55e', reason: 'Vas ganando y la señal de 15 minutos sigue a tu favor. Aguanta hasta el cierre de la ventana y vigila si la señal se da la vuelta.' };
+  }
+  if (winning == null) {
+    return { key: 'hold-careful', label: 'AGUANTA CON CUIDADO', color: '#f59e0b', reason: 'Sin promedio de 60 s del BRTI no se puede confirmar si vas ganando o perdiendo: el valor instantáneo no liquida y no se usa para decidir. Espera al promedio o comprueba en Kalshi.' };
+  }
+  return { key: 'hold-careful', label: 'AGUANTA CON CUIDADO', color: '#f59e0b', reason: 'Señales mezcladas: el BRTI y la señal de 15 minutos no van en la misma dirección. No hay decisión clara: espera a que se defina y si la señal va en tu contra, sal.' };
 }
 
 // Decisión COBRO / AGUANTO / SALGO para una posición REAL de Kalshi

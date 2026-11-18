@@ -24,10 +24,11 @@
 //  2. GET /api/kalshi/brti (autenticado): lee el último tick. Sin
 //     Kalshi conectado NO se abre ninguna conexión y responde
 //     connected:false (el cliente cae a Coinbase con aviso).
-//  3. Pestaña Kalshi: "Valor actual Kalshi (BRTI)" en vivo, promedio
+//  3. Pestaña Kalshi: "BRTI ahora" en vivo, promedio
 //     de 60 s, diferencia contra el objetivo y GANANDO/PERDIENDO
-//     según el BRTI (brtiWinning: contra el promedio de 60 s, o el
-//     valor si no hay promedio; >= liquida SÍ).
+//     según el BRTI (brtiWinning: SOLO contra el promedio de 60 s;
+//     CORRECCIÓN v15: sin promedio no hay resultado, el tick
+//     instantáneo nunca liquida; >= liquida SÍ).
 // Uso: node tests-v13.5.mjs (después de npm --prefix client run build)
 
 import { readFileSync, readdirSync } from 'node:fs';
@@ -111,7 +112,7 @@ check('SUBE + avg60s 70400 < objetivo = PERDIENDO', brtiWinning({ dir: 'up', tar
 check('BAJA + avg60s 70400 < objetivo = GANANDO', brtiWinning({ dir: 'down', targetPrice: TARGET, avg60s: 70400, value: 70500 }).winning === true);
 check('BAJA + avg60s 70500 >= objetivo = PERDIENDO', brtiWinning({ dir: 'down', targetPrice: TARGET, avg60s: 70500, value: 70400 }).winning === false);
 check('SUBE + avg == objetivo exacto = GANANDO (>= liquida SÍ)', brtiWinning({ dir: 'up', targetPrice: TARGET, avg60s: TARGET, value: TARGET }).winning === true);
-check('sin avg60s usa el valor en vivo (refLabel value)', (() => { const r = brtiWinning({ dir: 'up', targetPrice: TARGET, avg60s: null, value: 70500 }); return r && r.winning === true && r.refLabel === 'value'; })());
+check('CORRECCIÓN v15: sin avg60s = null aunque el tick esté por encima (el tick nunca liquida)', brtiWinning({ dir: 'up', targetPrice: TARGET, avg60s: null, value: 70500 }) === null);
 check('sin objetivo = null (no se inventa)', brtiWinning({ dir: 'up', targetPrice: null, avg60s: 70500, value: 70500 }) === null);
 check('sin dirección = null', brtiWinning({ dir: null, targetPrice: TARGET, avg60s: 70500, value: 70500 }) === null);
 check('sin precios = null', brtiWinning({ dir: 'up', targetPrice: TARGET, avg60s: null, value: null }) === null);
@@ -125,21 +126,21 @@ check('routes.js: /kalshi/brti exige conexión (connected:false sin ella)', rout
 check('brti.js no tiene llamadas de escritura a Kalshi (ni /orders, ni POST, ni kalshiGet)', !src('server/brti.js').includes('/orders') && !src('server/brti.js').includes("method: 'POST'") && !src('server/brti.js').includes('kalshiGet('));
 check('brti.js se suscribe a cfbenchmarks_value con BRTI', src('server/brti.js').includes('cfbenchmarks_value') && src('server/brti.js').includes("index_ids: [BRTI_INDEX_ID]"));
 const app = src('client/src/App.jsx');
-check('App.jsx sondea /api/kalshi/brti cada 3 s en la pestaña Kalshi', app.includes("apiAuth('/api/kalshi/brti')") && app.includes('3000'));
-check('App.jsx muestra "Valor actual Kalshi (BRTI)"', app.includes('Valor actual Kalshi (BRTI)'));
-check('App.jsx muestra aviso de fallback a Coinbase si no hay BRTI', app.includes('Precio de Coinbase, no de Kalshi (BRTI)'));
-check('App.jsx usa brtiWinning para GANANDO/PERDIENDO', app.includes('brtiWinning'));
+check('App.jsx sondea /api/kalshi/brti cada 2 s (v15)', app.includes("apiAuth('/api/kalshi/brti')") && app.includes('2000'));
+check('App.jsx muestra "BRTI ahora" (v15)', app.includes('BRTI ahora'));
+check('App.jsx muestra aviso de fallback a Coinbase si no hay BRTI (v15: Sin valor en vivo de Kalshi)', app.includes('Sin valor en vivo de Kalshi') && app.includes('Precio de Coinbase ahora:'));
+check('App.jsx usa brtiPositionOutcome (promedio 60 s) para GANANDO/PERDIENDO (v15)', app.includes('brtiPositionOutcome'));
 check('kalshi.js documenta que Pyth NO liquida KXBTC15M', src('client/src/kalshi.js').includes('Pyth NO liquida'));
-check('VERSION.txt dice v14', src('VERSION.txt').startsWith('v14'));
+check('VERSION.txt dice v15', src('VERSION.txt').startsWith('v15'));
 check('README menciona v13.5 y BRTI', src('README.md').includes('v13.5') && src('README.md').includes('BRTI'));
 
 // --- 6. Bundle compilado ---
 let bundleOk = false;
 try {
   const files = readdirSync('client/dist/assets').filter((f) => f.endsWith('.js'));
-  bundleOk = files.some((f) => readFileSync(`client/dist/assets/${f}`, 'utf8').includes('Valor actual Kalshi (BRTI)'));
+  bundleOk = files.some((f) => readFileSync(`client/dist/assets/${f}`, 'utf8').includes('BRTI ahora'));
 } catch { bundleOk = false; }
-check('bundle compilado contiene "Valor actual Kalshi (BRTI)"', bundleOk);
+check('bundle compilado contiene "BRTI ahora" (v15)', bundleOk);
 
 console.log(`\ntests-v13.5: ${pass} pasaron, ${fail} fallaron`);
 process.exit(fail ? 1 : 0);

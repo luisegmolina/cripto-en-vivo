@@ -109,9 +109,9 @@ ok('v14: nota del historial eliminada con la tabla (por diseño)', !appSrc.inclu
 ok('v14: tabla Apertura/Cierre eliminada con el historial (por diseño)', !appSrc.includes('<th>Apertura</th><th>Cierre</th>'));
 ok('SEÑAL DÉBIL junto al veredicto', appSrc.includes('SEÑAL DÉBIL'));
 ok('aviso de señal débil cita la medida Kalshi', appSrc.includes('Medido como liquida Kalshi'));
-ok('banner de decisión real debajo del veredicto, antes del formulario virtual',
-  appSrc.indexOf('Tu posición real en Kalshi') > appSrc.indexOf('MODO KALSHI 15 MIN') &&
-  appSrc.indexOf('Tu posición real en Kalshi') < appSrc.indexOf('<h3>¿Cobro o me quedo?</h3>'));
+ok('v15: decisión real en §3, antes de las señales y del formulario virtual',
+  appSrc.indexOf('3 · Decisión') > appSrc.indexOf('2 · Mi posición en vivo') &&
+  appSrc.indexOf('3 · Decisión') < appSrc.indexOf('<h3>¿Cobro o me quedo?</h3>'));
 ok('App.jsx pasa active (siempre, pantalla única) y onRealDecision a KalshiConnect', appSrc.includes('active onRealDecision={handleRealDecisions}'));
 ok('KalshiConnect usa cashOutDecisionReal para la tabla real', kcSrc.includes('cashOutDecisionReal') && kcSrc.includes('realDecisionFor(pos)'));
 ok('KalshiConnect ya no decide la real con cashOutDecision', !kcSrc.includes('cashOutDecision({ dir'));
@@ -132,8 +132,8 @@ ok('servidor Kalshi devuelve los fills normalizados', kalshiServerSrc.includes('
 
 // ---------- 5. Versión ----------
 console.log('— versión —');
-ok('VERSION.txt empieza por v14', versionTxt.startsWith('v14'));
-ok('VERSION_LABEL v14 en App.jsx', appSrc.includes("VERSION_LABEL = 'v14"));
+ok('VERSION.txt empieza por v15', versionTxt.startsWith('v15'));
+ok('VERSION_LABEL v15 en App.jsx', appSrc.includes("VERSION_LABEL = 'v15"));
 
 // ---------- 1 y 3 [vivo]: velas reales + cambio 24h unificado ----------
 console.log('— [vivo] velas reales 15m y cambio 24h unificado —');
