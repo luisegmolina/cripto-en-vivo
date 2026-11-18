@@ -103,16 +103,16 @@ console.log('— estáticos: UI y textos v13.4 —');
 ok('App.jsx usa la medición Kalshi para el backtest 15m', appSrc.includes('backtestWindowSignal(candles15m)'));
 ok('App.jsx usa la medición Kalshi para últimas ventanas', appSrc.includes('evaluateWindowSignal(candles15m, 5)'));
 ok('la señal general 1h sigue con la medida de vela siguiente', appSrc.includes('backtestSignal(candles1h)') && appSrc.includes('signalHistory(candles1h, 10)'));
-ok('etiqueta honesta: Últimas ventanas con señal clara', appSrc.includes('Últimas ventanas con señal clara'));
+ok('v14: historial de últimas ventanas eliminado de la vista (por diseño)', !appSrc.includes('Últimas ventanas con señal clara'));
 ok('ya no dice "Últimas ventanas de 15 min" a secas', !appSrc.includes('Últimas ventanas de 15 min —'));
-ok('nota que no son ventanas seguidas', appSrc.includes('No son las últimas 5 ventanas seguidas'));
-ok('tabla con Apertura y Cierre (no solo "Precio" y "Después")', appSrc.includes('<th>Apertura</th><th>Cierre</th>'));
+ok('v14: nota del historial eliminada con la tabla (por diseño)', !appSrc.includes('No son las últimas 5 ventanas seguidas'));
+ok('v14: tabla Apertura/Cierre eliminada con el historial (por diseño)', !appSrc.includes('<th>Apertura</th><th>Cierre</th>'));
 ok('SEÑAL DÉBIL junto al veredicto', appSrc.includes('SEÑAL DÉBIL'));
 ok('aviso de señal débil cita la medida Kalshi', appSrc.includes('Medido como liquida Kalshi'));
 ok('banner de decisión real debajo del veredicto, antes del formulario virtual',
   appSrc.indexOf('Tu posición real en Kalshi') > appSrc.indexOf('MODO KALSHI 15 MIN') &&
   appSrc.indexOf('Tu posición real en Kalshi') < appSrc.indexOf('<h3>¿Cobro o me quedo?</h3>'));
-ok('App.jsx pasa active y onRealDecision a KalshiConnect', appSrc.includes("active={activeTab === 'kalshi'}") && appSrc.includes('onRealDecision={handleRealDecisions}'));
+ok('App.jsx pasa active (siempre, pantalla única) y onRealDecision a KalshiConnect', appSrc.includes('active onRealDecision={handleRealDecisions}'));
 ok('KalshiConnect usa cashOutDecisionReal para la tabla real', kcSrc.includes('cashOutDecisionReal') && kcSrc.includes('realDecisionFor(pos)'));
 ok('KalshiConnect ya no decide la real con cashOutDecision', !kcSrc.includes('cashOutDecision({ dir'));
 ok('regla por precio documentada en la UI (≥85¢ / ≤15¢)', kcSrc.includes('≥85¢') && kcSrc.includes('≤15¢'));
@@ -132,8 +132,8 @@ ok('servidor Kalshi devuelve los fills normalizados', kalshiServerSrc.includes('
 
 // ---------- 5. Versión ----------
 console.log('— versión —');
-ok('VERSION.txt empieza por v13.5', versionTxt.startsWith('v13.5'));
-ok('VERSION_LABEL v13.5 en App.jsx', appSrc.includes("VERSION_LABEL = 'v13.5"));
+ok('VERSION.txt empieza por v14', versionTxt.startsWith('v14'));
+ok('VERSION_LABEL v14 en App.jsx', appSrc.includes("VERSION_LABEL = 'v14"));
 
 // ---------- 1 y 3 [vivo]: velas reales + cambio 24h unificado ----------
 console.log('— [vivo] velas reales 15m y cambio 24h unificado —');

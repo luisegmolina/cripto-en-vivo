@@ -56,7 +56,7 @@ function numOrNull(v) {
   return Number(v);
 }
 
-export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, currentPrice, referencePrice, referenceSource, currency, user = null, onLogout = null, active = true, onRealDecision = null }) {
+export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, currentPrice, referencePrice, referenceSource, currency, user = null, onLogout = null, active = true, onRealDecision = null, minimal = false }) {
   const [status, setStatus] = useState(null); // {connected, keyIdPreview, lastSyncAt, status}
   const [positionsData, setPositionsData] = useState(null); // {connected, balance, positions, fetchedAt, source}
   const [loading, setLoading] = useState(true);
@@ -249,6 +249,35 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
       <p className="muted">Tu clave privada se envía cifrada al servidor y nunca se muestra completa: después de conectar solo verás el Key ID. No se guarda en este navegador.</p>
     </form>
   );
+
+  // v14: MODO MÍNIMO. La pantalla única no muestra la tabla de
+  // posiciones ni el historial (eso es lo que cargaba la vista).
+  // La lógica NO cambia: se siguen cargando las posiciones y
+  // onRealDecision sigue subiendo la decisión real al banner de
+  // App.jsx. Solo se muestra una línea de estado y el formulario
+  // para conectar/desconectar.
+  if (minimal) {
+    return (
+      <div>
+        {loading && <p className="muted">Comprobando conexión con Kalshi…</p>}
+        {error && <p className="error">{error}</p>}
+        {msg && <p className="muted">{msg}</p>}
+        {connected && syncStale && (
+          <p className="warn">⚠️ Posiciones con más de 2 min sin actualizar: Kalshi no está devolviendo datos frescos.</p>
+        )}
+        {connected ? (
+          <>
+            <p className="muted">✅ Kalshi conectado ({status.keyIdPreview || ''}){balance ? <> · Balance {fmtUsd(balance.balance)} · Cartera {fmtUsd(balance.portfolioValue)}</> : ''}</p>
+            <div className="row">
+              <button onClick={load} disabled={loading}>Actualizar</button>
+              <button onClick={doDisconnect} disabled={busy}>Desconectar Kalshi</button>
+              {onLogout && <button onClick={onLogout}>Salir de mi cuenta</button>}
+            </div>
+          </>
+        ) : !loading && connectForm}
+      </div>
+    );
+  }
 
   return (
     <div>

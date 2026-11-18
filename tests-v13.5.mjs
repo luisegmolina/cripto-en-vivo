@@ -130,7 +130,7 @@ check('App.jsx muestra "Valor actual Kalshi (BRTI)"', app.includes('Valor actual
 check('App.jsx muestra aviso de fallback a Coinbase si no hay BRTI', app.includes('Precio de Coinbase, no de Kalshi (BRTI)'));
 check('App.jsx usa brtiWinning para GANANDO/PERDIENDO', app.includes('brtiWinning'));
 check('kalshi.js documenta que Pyth NO liquida KXBTC15M', src('client/src/kalshi.js').includes('Pyth NO liquida'));
-check('VERSION.txt dice v13.5', src('VERSION.txt').startsWith('v13.5'));
+check('VERSION.txt dice v14', src('VERSION.txt').startsWith('v14'));
 check('README menciona v13.5 y BRTI', src('README.md').includes('v13.5') && src('README.md').includes('BRTI'));
 
 // --- 6. Bundle compilado ---

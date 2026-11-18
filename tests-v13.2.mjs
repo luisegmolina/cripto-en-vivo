@@ -133,7 +133,7 @@ check('position 0 + sin fills = lado desconocido (null, no inventado)', (() => {
   const app = readFileSync('./client/src/App.jsx', 'utf8');
   check('cliente: pestaña Kalshi muestra "Precio objetivo (Kalshi)"', app.includes('Precio objetivo (Kalshi)'));
   check('cliente: muestra "Precio SÍ / NO (Kalshi)"', app.includes('Precio SÍ / NO (Kalshi)'));
-  check('cliente: aviso BRTI (liquidación, no Coinbase)', app.includes('CF Benchmarks BRTI') && app.includes('no con Coinbase'));
+  check('cliente: aviso BRTI en la línea única de v14 (liquidación, no Coinbase)', app.includes('Kalshi liquida con el índice BRTI') && app.includes('no con Coinbase'));
   check('cliente: aviso de caída a Coinbase ("precio de referencia de Coinbase, no de Kalshi")', app.toLowerCase().includes('precio de referencia de coinbase, no de kalshi'));
   check('cliente: usa el objetivo de Kalshi como referencia (kalshiTargetPrice)', app.includes('kalshiTargetPrice'));
   const appSrv = readFileSync('./server/app.js', 'utf8');

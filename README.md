@@ -277,6 +277,17 @@ ofrece un apodo local (sin contraseña, sin servidor).
   local" (sin contraseña, sin servidor), que se usa en la liga semanal
   y en la tarjeta para compartir. Nada se envía a ningún servidor.
 
+## Novedades v14: Una sola pantalla — BRTI, objetivo, gráfica y señales (17-nov-2026)
+
+Pedido de Luis: limpia la pantalla, que solo se vean el precio actual de Kalshi, el precio objetivo, la gráfica y las señales, todo en una sola pantalla, y lo demás fuera.
+
+1. **Precio actual de Kalshi (BRTI) en vivo** (el de v13.5): valor en vivo, promedio de 60 s (el que liquida), diferencia contra el objetivo en $ y %, y GANANDO / PERDIENDO según BRTI para tu primera posición real abierta.
+2. **Precio objetivo de Kalshi**: el del mercado KXBTC15M actual, con la ventana, la cuenta atrás y los precios SÍ/NO en centavos.
+3. **La gráfica**: velas BTC 15m, siempre visible, sin botones de intervalo ni toggles de indicadores.
+4. **Las señales**: veredicto SUBE / BAJA / ESPERAR 15m y ¿Cobro o me quedo? (virtual y banner de decisión real por precio del contrato).
+
+Eliminado de la vista: las pestañas Mercados, Gráfico y señal, Cartera virtual, Liga y misiones; ticker tape, grid de mercados, panel PRO, screener, backtest, historiales, análisis en vivo, cartera, liga, misiones/XP, logros, alertas y estado del servidor. Queda, discreto: encabezado pequeño con sesión, "Mi cuenta Kalshi — conectar / desconectar" como detalle colapsado (KalshiConnect en modo mínimo: carga las posiciones y sube la decisión real, sin mostrar la tabla ni el historial), y un aviso único en una línea (prueba educativa, dinero virtual, solo lectura, liquidación BRTI). La vista Admin (#admin) sigue intacta. El backend no se toca: auth JWT, Kalshi solo lectura, `/api/kalshi-market` y `/api/kalshi/brti` siguen igual. Pruebas: `tests-v14.mjs` (49).
+
 ## Novedades v13.5: Valor en vivo de Kalshi (BRTI) por WebSocket (17-nov-2026)
 
 Luis lo aprobó: la pestaña Kalshi ya no decide si vas ganando o perdiendo con el precio de Coinbase, sino con el número que de verdad liquida el mercado: el índice **CF Benchmarks BRTI**.
