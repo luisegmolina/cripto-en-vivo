@@ -85,7 +85,7 @@ check('dist/index.html existe y referencia un bundle', Boolean(bundleMatch));
 if (bundleMatch) {
   const bundle = readFileSync(path.join(ROOT, 'client/dist/assets', bundleMatch[1]), 'utf8');
   check('bundle distinto al de v13.5 (index-BJtnnrQL.js)', bundleMatch[1] !== 'index-BJtnnrQL.js');
-  check('bundle trae la etiqueta v15', bundle.includes('v15'));
+  check('bundle trae la etiqueta v16', bundle.includes('v16'));
   check('bundle trae el BRTI en vivo', bundle.includes('BRTI ahora'));
   check('bundle trae la gráfica 15m', bundle.includes('Gráfica'));
   check('bundle NO trae la navegación por pestañas', !bundle.includes('app-tabs') && !bundle.includes('Gráfico y señal'));

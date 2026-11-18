@@ -79,7 +79,7 @@ const frontend = frontendSrc();
 const i1 = mainReturn.indexOf('1 · Mi posición en vivo');
 const i2 = mainReturn.indexOf('2 · Decisión');
 const i3 = mainReturn.indexOf('3 · Referencia en tiempo real');
-const i4 = mainReturn.indexOf('4 · Señales del mercado');
+const i4 = mainReturn.indexOf('4 · Radar de Señales');
 const i5 = mainReturn.indexOf('5 · Gráfica · BTC 15m');
 check('orden §1 posición < §2 decisión < §3 referencia < §4 señales < §5 gráfica', i1 > 0 && i1 < i2 && i2 < i3 && i3 < i4 && i4 < i5);
 check('§3: etiquetas claras "BRTI ahora" y "Promedio de 60 s (el que liquida)"',
@@ -95,7 +95,7 @@ check('§3: si no hay promedio, lo dice (sin diferencia ni ganar/perder inventad
 check('§3: cuenta atrás, objetivo y SÍ/NO en la referencia',
   mainReturn.includes('Cierra en') && mainReturn.includes('Precio objetivo (Kalshi)') && mainReturn.includes('Precio SÍ / NO (Kalshi)'));
 check('§1: posición real con lado, apuesta, medio, cantidad y P&L estimado según BRTI',
-  mainReturn.includes('Mi posición en vivo') && mainReturn.includes('P&L estimado si la ventana cerrara ahora según BRTI') && mainReturn.includes('Precio medio') && mainReturn.includes('Apuesta:'));
+  mainReturn.includes('Mi posición en vivo') && mainReturn.includes('P&amp;L estimado si la ventana cerrara ahora según BRTI') && mainReturn.includes('Precio medio') && mainReturn.includes('Apuesta:'));
 check('§1: avisos VAS GANANDO / VAS PERDIENDO / PUEDES PERDER',
   mainReturn.includes('VAS GANANDO según BRTI') && mainReturn.includes('VAS PERDIENDO según BRTI') && mainReturn.includes('PUEDES PERDER'));
 check('§1: sin posición abierta, lo dice y no inventa',
@@ -113,7 +113,7 @@ console.log('v15 — actualización rápida solo para §1-§2');
 check('BRTI se sondea cada 2 s (no 3 s)', app.includes("visibleInterval(load, 2000)") && app.includes("apiAuth('/api/kalshi/brti')"));
 check('mercado Kalshi (objetivo + SÍ/NO) cada 15 s (caché del servidor)', app.includes('visibleInterval(load, 15000)') && app.includes("api('/api/kalshi-market')"));
 check('posiciones se refrescan cada 30 s (KalshiConnect) y el P&L se recalcula con cada tick BRTI',
-  kc.includes('30000') && mainReturn.includes('el P&L se recalcula con cada tick BRTI (cada 2 s)'));
+  kc.includes('30000') && mainReturn.includes('P&amp;L se recalcula con cada tick BRTI (cada 2 s)'));
 check('fallback: "Sin valor en vivo de Kalshi" + precio de Coinbase con aviso, nunca en blanco',
   mainReturn.includes('Sin valor en vivo de Kalshi') && mainReturn.includes('Precio de Coinbase ahora:'));
 check('KalshiConnect sube precio medio (avgPriceCents) y admite decisión null',
@@ -132,7 +132,7 @@ check('dist/index.html existe y referencia un bundle', Boolean(bundleMatch));
 if (bundleMatch) {
   const bundle = readFileSync(path.join(ROOT, 'client/dist/assets', bundleMatch[1]), 'utf8');
   check('bundle distinto al de v14 (index-Cy15LHh0.js)', bundleMatch[1] !== 'index-Cy15LHh0.js');
-  check('bundle trae la etiqueta v15', bundle.includes('v15'));
+  check('bundle trae la etiqueta v16', bundle.includes('v16'));
   check('bundle trae "BRTI ahora" y "INVIERTE MÁS" y "PUEDES PERDER"',
     bundle.includes('BRTI ahora') && bundle.includes('INVIERTE MÁS') && bundle.includes('PUEDES PERDER'));
   check('bundle NO trae la etiqueta vieja "Valor actual Kalshi (BRTI)"',

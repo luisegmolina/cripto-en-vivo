@@ -39,7 +39,7 @@ ok('v14: sin pestañas (las 6 eliminadas por diseño; Admin sigue por #admin)', 
 ok('sin resto de depuración "(admin /admin)"', !appSrc.includes('(admin /admin)'));
 ok('sin interruptor ni estado kalshiMode', !appSrc.includes('kalshiMode'));
 ok('v14: ticker tape eliminado por completo', !appSrc.includes('tape-track') && !appSrc.includes('tape-item'));
-ok('CSS de pestañas presente', cssSrc.includes('.app-tabs'));
+ok('v16: CSS de pestañas eliminado (la clase muerta .app-tabs ya no existe; la vista es pantalla única desde v14)', !cssSrc.includes('.app-tabs'));
 ok('v14: sección Kalshi sin envoltura de pestaña (pantalla única)', !appSrc.includes("{activeTab === 'kalshi' && (") && appSrc.includes('MODO KALSHI 15 MIN'));
 ok('v14: Mi cuenta Kalshi vive en un <details> discreto de la pantalla única', !appSrc.includes("{activeTab === 'cuenta' && (") && appSrc.includes('account-details') && kcSrc.includes('Mi cuenta</h3>'));
 

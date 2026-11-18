@@ -29,8 +29,8 @@ check('last15mKey usa candlesSignature(candles15m) (incluye close/high/low, no s
   app.includes('const last15mKey = candlesSignature(candles15m);'));
 check('setMtfCandles usa candlesSignature(o[tf]) para actualizar cierres intra-vela en 1m/5m/15m/1h',
   app.includes('const sig = (o) => VERDICT_TFS.map((tf) => candlesSignature(o[tf])).join(\'|\');'));
-check('VERSION_LABEL actualizado a v15.5 en App.jsx',
-  app.includes("const VERSION_LABEL = 'v15.5"));
+check('VERSION_LABEL actualizado a la versión actual (v16.0) en App.jsx',
+  app.includes("const VERSION_LABEL = 'v16.0"));
 
 console.log('v15.5 — 2. Calibración de analyze() (sin sesgo inverso en RSI medio + impulso corto EMA 9/20 + 3 velas)');
 {
@@ -182,8 +182,8 @@ check('LiveReference.jsx muestra distancia en ATR 15m frente al objetivo',
   liveRef.includes('ATR 15m'));
 check('App.jsx mantiene menos de 900 líneas',
   app.split('\n').length < 900);
-check('VERSION.txt empieza por v15.5 y README documenta v15.5',
-  readFileSync(path.join(ROOT, 'VERSION.txt'), 'utf8').startsWith('v15.5') && readFileSync(path.join(ROOT, 'README.md'), 'utf8').includes('v15.5'));
+check('VERSION.txt documenta v15.5 y README documenta v15.5',
+  readFileSync(path.join(ROOT, 'VERSION.txt'), 'utf8').includes('v15.5') && readFileSync(path.join(ROOT, 'README.md'), 'utf8').includes('v15.5'));
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);
 process.exit(fail ? 1 : 0);

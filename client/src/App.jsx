@@ -4,7 +4,7 @@ import { analyze, emaSeries, bollingerSeries } from './analysis.js';
 import { updateLastCandle, candlesSignature, mergeServerCandles } from './liveCandle.js';
 import { evaluateWindowSignal, backtestWindowSignal } from './windowOutcome.js';
 import { multiTfVerdict, reasonsFor, atr, VERDICT_TFS } from './verdict.js';
-import { window15m, kalshiVerdictForScore, estimatedProb, adjustProbForRecent, recentWinRate, cashOutDecision, suggestedExitPrice, brtiPositionOutcome, estimateSettlementPnl, liveDecision, marketRecommendation, detectMarketMovement, buildBetPlan } from './kalshi.js';
+import { window15m, fmtCountdown, kalshiVerdictForScore, estimatedProb, adjustProbForRecent, recentWinRate, cashOutDecision, suggestedExitPrice, brtiPositionOutcome, estimateSettlementPnl, liveDecision, marketRecommendation, detectMarketMovement, buildBetPlan } from './kalshi.js';
 import { shouldFireAlert, shouldSignalAlert, dedupePriceAlerts } from './alerts.js';
 import { APP_URL } from './shareCard.js';
 import { getToken, register, login, me, logout, apiAuth } from './auth.js';
@@ -19,10 +19,8 @@ import AuthModal from './components/AuthModal.jsx';
 
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v15.5 — Movimientos del mercado en vivo + plan de apuesta SÍ/NO con ventaja';
+const VERSION_LABEL = 'v16.0 — Terminal Táctica Kalshi BTC 15m';
 
-// v15.2: setInterval que no consulta al servidor con la pestaña oculta y se
-// pone al día en cuanto vuelves a ella. Devuelve la función que lo detiene.
 function visibleInterval(fn, ms) {
   const t = setInterval(() => { if (!document.hidden) fn(); }, ms);
   const onVisible = () => { if (!document.hidden) fn(); };
@@ -67,9 +65,6 @@ function sameTicker(a, b) {
     && a.high24h === b.high24h && a.low24h === b.low24h && a.open24h === b.open24h
     && a.volume24h === b.volume24h && a.change24h === b.change24h;
 }
-// Notificación: si hay service worker activo, la muestra él (llega
-// aunque la pestaña esté en segundo plano); si no, la clásica del
-// navegador. Push real con servidor VAPID NO hay (ver README).
 function notify(title, body) {
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
   if (navigator.serviceWorker && navigator.serviceWorker.controller) {
@@ -84,15 +79,8 @@ function notify(title, body) {
 export default function App() {
   const [symbol, setSymbol] = useState('BTC');
   const [currency, setCurrency] = useState('USD');
-  // OJO: el estado se llama candleInterval (NO "interval") a propósito.
-  // Antes se llamaba [interval, setInterval] y eso eclipsaba el
-  // setInterval global y causaba el bucle "Maximum update depth exceeded".
-  // Nunca nombrar un setter setInterval.
   const [candleInterval, setCandleInterval] = useState('15m');
 
-  // v14: UNA SOLA PANTALLA. No hay pestañas: la app es solo Kalshi
-  // (BRTI en vivo, precio objetivo, gráfica 15m y señales). activeTab
-  // es siempre 'kalshi' y el intervalo de velas es siempre 15m.
   const activeTab = 'kalshi';
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
@@ -115,11 +103,10 @@ export default function App() {
   const [brti, setBrti] = useState(null);
   useEffect(() => { saveLS('cev_kalshi_position_v1', { entryPrice: kalshiEntryPrice, dir: kalshiDir, amount: kalshiAmount, entryScore: kalshiPos.entryScore }); }, [kalshiEntryPrice, kalshiDir, kalshiAmount]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // --- v12: USUARIOS + KALSHI SOLO LECTURA ---
   const [token, setTokenState] = useState(() => getToken());
   const [user, setUser] = useState(null);
   const [view, setView] = useState(() => (typeof window !== 'undefined' && window.location.hash === '#admin' ? 'admin' : 'app'));
-  const [showAuth, setShowAuth] = useState(null); // 'login' | 'register' | null
+  const [showAuth, setShowAuth] = useState(null);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authName, setAuthName] = useState('');
@@ -144,7 +131,7 @@ export default function App() {
         if (Array.isArray(srvAlerts) && srvAlerts.length > 0) setPriceAlerts(dedupePriceAlerts(srvAlerts));
         else apiAuth('/api/me/alerts', { method: 'PUT', body: { alerts: priceAlerts } }).catch(() => {});
       }
-    } catch { /* sincronización opcional: nunca rompe la app */ }
+    } catch {}
     serverSyncDone.current = true;
   }
 
@@ -214,6 +201,7 @@ export default function App() {
   const [chartReady, setChartReady] = useState(0);
   const candleSeries = useRef(null);
   const volumeSeries = useRef(null);
+  const ema9Series = useRef(null);
   const ema20Series = useRef(null);
   const ema50Series = useRef(null);
   const bbUpperSeries = useRef(null);
@@ -221,7 +209,6 @@ export default function App() {
   const bbLowerSeries = useRef(null);
   const candlesRef = useRef([]);
 
-  // v15.3.1: estados conservados para sincronización v12 y alertas por tick.
   const [portfolio, setPortfolio] = useState(() => loadLS('cev_portfolio_v1', { cash: START_CASH, holdings: {}, trades: [] }));
   const [priceAlerts, setPriceAlerts] = useState(() => dedupePriceAlerts(loadLS('cev_price_alerts_v1', [])));
   const priceAlertsRef = useRef(priceAlerts);
@@ -244,7 +231,6 @@ export default function App() {
 
   const analysis = useMemo(() => analyze(candles), [candles]);
 
-  // --- v8: VEREDICTO multi-timeframe (1m, 5m, 15m, 1h) ---
   const [mtfCandles, setMtfCandles] = useState({});
   const mtfAnalysis = useMemo(() => {
     const out = {};
@@ -256,12 +242,8 @@ export default function App() {
   }, [mtfCandles, candles, candleInterval]);
   const mtfVerdict = useMemo(() => multiTfVerdict(mtfAnalysis), [mtfAnalysis]);
 
-  // --- v11 / v15.5: cálculos del MODO KALSHI 15 MIN en tiempo real ---
   const kalshiPrice = ticker?.price ?? markets.find((m) => m.symbol === symbol)?.price ?? null;
   const kalshiWin = window15m(nowMs);
-  // v15.5: priorizar `candles` cuando candleInterval === '15m' porque se
-  // actualiza cada 1 segundo con updateLastCandle (antes prefería mtfCandles['15m']
-  // y usaba una clave sin close/high/low, congelando la señal durante los 15 min).
   const candles15m = (candleInterval === '15m' && candles.length >= 32)
     ? candles
     : ((mtfCandles['15m'] && mtfCandles['15m'].length >= 32)
@@ -292,8 +274,6 @@ export default function App() {
     avg60s: brti && brti.source === 'kalshi' ? brti.avg60s : null,
     value: brti && brti.source === 'kalshi' ? brti.value : null,
   };
-  // v15 + CORRECCIÓN: referencia BRTI-objetivo SOLO con el promedio
-  // de 60 s (el que liquida). Si no hay promedio, null.
   const brtiRefPrice = brti && brti.source === 'kalshi' && brti.avg60s != null ? brti.avg60s : null;
   const brtiDiff = brtiRefPrice != null && kalshiTargetPrice ? brtiRefPrice - kalshiTargetPrice : null;
   const brtiDiffPct = brtiDiff != null && kalshiTargetPrice ? (brtiDiff / kalshiTargetPrice) * 100 : null;
@@ -312,7 +292,6 @@ export default function App() {
   const marketRec = marketRecommendation({ signalKey: kalshiVerdict.key, weakSignal: kalshiWeakSignal, conflict: marketConflict, recent: kalshiRecent });
   const kalshiProbAdj = adjustProbForRecent(kalshiProb, kalshiHist);
 
-  // v15.5: lectura en vivo del movimiento del mercado y plan exacto de apuesta SÍ/NO
   const marketMovement = useMemo(() => detectMarketMovement({
     candles15m, mtfAnalysis, spotPrice: kalshiPrice, targetPrice: kalshiTargetPrice,
     brtiAvg60s: brtiRefPrice, atr15m: kalshiAtr,
@@ -339,7 +318,7 @@ export default function App() {
     }
     setKalshiPos({ entryPrice: kalshiEntryPrice, dir: kalshiDir, amount: kalshiAmount, entryScore: kalshiScore });
     saveLS('cev_kalshi_position_v1', { entryPrice: kalshiEntryPrice, dir: kalshiDir, amount: kalshiAmount, entryScore: kalshiScore });
-    setKalshiMsg(`Posición virtual guardada: apostaste a que ${kalshiDir === 'up' ? 'SUBE' : 'BAJA'} desde ${fmt(kalshiEntryNum, currency)} con ${fmt(kalshiAmountNum, currency)} virtuales. La app te dirá si cobrar o salir.`);
+    setKalshiMsg(`Posición virtual guardada: apostaste a que ${kalshiDir === 'up' ? 'SUBE' : 'BAJA'} desde ${fmt(kalshiEntryNum, currency)} con ${fmt(kalshiAmountNum, currency)} virtuales.`);
   };
   const clearKalshiPosition = () => {
     setKalshiPos({ entryPrice: '', dir: 'up', amount: '100', entryScore: null });
@@ -376,7 +355,6 @@ export default function App() {
     return () => { alive = false; stop(); };
   }, [activeTab, symbol, user?.id]);
 
-  // --- Datos: polling AL SERVIDOR (localhost:3001), nunca a los exchanges ---
   useEffect(() => {
     let alive = true;
     const loadTicker = async () => {
@@ -389,7 +367,7 @@ export default function App() {
           candlesRef.current = live;
           try {
             candleSeries.current?.update({ time: last.time, open: last.open, high: last.high, low: last.low, close: last.close });
-            volumeSeries.current?.update({ time: last.time, value: last.volume || 0, color: last.close >= last.open ? 'rgba(34,197,94,.5)' : 'rgba(239,68,68,.5)' });
+            volumeSeries.current?.update({ time: last.time, value: last.volume || 0, color: last.close >= last.open ? 'rgba(16,185,129,.5)' : 'rgba(244,63,94,.5)' });
           } catch {}
           lastCandlesSig.current = candlesSignature(live);
           setCandles(live);
@@ -411,7 +389,7 @@ export default function App() {
           lastMarketsSig.current = sig;
           setMarkets(list);
         }
-      } catch { /* sin mercados: se mantiene la última lista */ }
+      } catch {}
     };
     const loadCandles = async () => {
       try {
@@ -440,9 +418,6 @@ export default function App() {
     setCandles([]);
   }, [symbol, currency, candleInterval]);
 
-  // v8 / v15.5: velas de 1m, 5m, 15m y 1h para la confluencia del veredicto.
-  // v15.5: usa candlesSignature(o[tf]) para no ignorar los cambios de cierre,
-  // máximo y mínimo dentro de la vela en curso de cada temporalidad.
   useEffect(() => {
     let alive = true;
     const load = async () => {
@@ -462,7 +437,6 @@ export default function App() {
     return () => { alive = false; stop(); };
   }, [symbol, currency]);
 
-  // --- Alertas de precio personalizadas: se comprueban con cada tick ---
   useEffect(() => {
     if (!ticker || ticker.price == null) return;
     const price = ticker.price;
@@ -487,7 +461,6 @@ export default function App() {
     if (fired) setPriceAlerts(next);
   }, [ticker, symbol, currency]);
 
-  // --- v8/v13: ALERTA cuando el VEREDICTO cambia ---
   const verdictKeyNow = mtfVerdict.verdict.key;
   useEffect(() => {
     const prev = prevVerdictKey.current;
@@ -526,20 +499,21 @@ export default function App() {
     const el = chartRef.current;
     if (!el) return undefined;
     const chart = createChart(el, {
-      width: el.clientWidth, height: 340,
-      layout: { background: { color: '#0b0f14' }, textColor: '#cbd5e1' },
+      width: el.clientWidth, height: 320,
+      layout: { background: { color: '#090d16' }, textColor: '#cbd5e1' },
       grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
       timeScale: { timeVisible: true, secondsVisible: false },
       localization: { locale: 'es-US' },
     });
     chartObj.current = chart;
-    candleSeries.current = chart.addCandlestickSeries({ upColor: '#22c55e', downColor: '#ef4444', wickUpColor: '#22c55e', wickDownColor: '#ef4444' });
+    candleSeries.current = chart.addCandlestickSeries({ upColor: '#10b981', downColor: '#f43f5e', wickUpColor: '#10b981', wickDownColor: '#f43f5e' });
     volumeSeries.current = chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: '' });
+    ema9Series.current = chart.addLineSeries({ color: '#a855f7', lineWidth: 1, title: 'EMA 9', priceLineVisible: false, lastValueVisible: false });
     ema20Series.current = chart.addLineSeries({ color: '#f59e0b', lineWidth: 1, title: 'EMA 20', priceLineVisible: false, lastValueVisible: false });
     ema50Series.current = chart.addLineSeries({ color: '#38bdf8', lineWidth: 1, title: 'EMA 50', priceLineVisible: false, lastValueVisible: false });
-    bbUpperSeries.current = chart.addLineSeries({ color: 'rgba(148,163,184,.7)', lineWidth: 1, title: 'Bollinger sup.', priceLineVisible: false, lastValueVisible: false });
-    bbMiddleSeries.current = chart.addLineSeries({ color: 'rgba(148,163,184,.4)', lineWidth: 1, title: 'Bollinger media', priceLineVisible: false, lastValueVisible: false });
-    bbLowerSeries.current = chart.addLineSeries({ color: 'rgba(148,163,184,.7)', lineWidth: 1, title: 'Bollinger inf.', priceLineVisible: false, lastValueVisible: false });
+    bbUpperSeries.current = chart.addLineSeries({ color: 'rgba(148,163,184,.55)', lineWidth: 1, title: 'Bollinger sup.', priceLineVisible: false, lastValueVisible: false });
+    bbMiddleSeries.current = chart.addLineSeries({ color: 'rgba(148,163,184,.3)', lineWidth: 1, title: 'Bollinger media', priceLineVisible: false, lastValueVisible: false });
+    bbLowerSeries.current = chart.addLineSeries({ color: 'rgba(148,163,184,.55)', lineWidth: 1, title: 'Bollinger inf.', priceLineVisible: false, lastValueVisible: false });
     const onResize = () => { try { chart.applyOptions({ width: el.clientWidth }); } catch {} };
     window.addEventListener('resize', onResize);
     let ro = null;
@@ -556,6 +530,7 @@ export default function App() {
       chartObj.current = null;
       candleSeries.current = null;
       volumeSeries.current = null;
+      ema9Series.current = null;
       ema20Series.current = null;
       ema50Series.current = null;
       bbUpperSeries.current = null;
@@ -565,7 +540,6 @@ export default function App() {
     };
   }, []);
 
-  // --- Gráfico de velas: datos (solo cuando cambia la firma de las velas) ---
   useEffect(() => {
     if (!candleSeries.current || !volumeSeries.current || !chartObj.current) return;
     if (!candles.length) {
@@ -578,14 +552,15 @@ export default function App() {
     if (sig === lastChartSig.current) return;
     lastChartSig.current = sig;
     candleSeries.current.setData(candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
-    volumeSeries.current.setData(candles.map((c) => ({ time: c.time, value: c.volume || 0, color: c.close >= c.open ? 'rgba(34,197,94,.5)' : 'rgba(239,68,68,.5)' })));
+    volumeSeries.current.setData(candles.map((c) => ({ time: c.time, value: c.volume || 0, color: c.close >= c.open ? 'rgba(16,185,129,.45)' : 'rgba(244,63,94,.45)' })));
     candleSeries.current.setMarkers(analysis.patterns.map((p) => ({
       time: p.time, position: p.dir === 'up' ? 'belowBar' : p.dir === 'down' ? 'aboveBar' : 'inBar',
-      color: p.dir === 'up' ? '#22c55e' : p.dir === 'down' ? '#ef4444' : '#94a3b8',
+      color: p.dir === 'up' ? '#10b981' : p.dir === 'down' ? '#f43f5e' : '#94a3b8',
       shape: p.dir === 'up' ? 'arrowUp' : p.dir === 'down' ? 'arrowDown' : 'circle', text: p.name,
     })));
     const toPoints = (series) => times.map((t, i) => (series[i] == null ? null : { time: t, value: series[i] })).filter(Boolean);
     try {
+      ema9Series.current?.setData(toPoints(emaSeries(closes, 9)));
       ema20Series.current?.setData(toPoints(emaSeries(closes, 20)));
       ema50Series.current?.setData(toPoints(emaSeries(closes, 50)));
     } catch {}
@@ -606,8 +581,8 @@ export default function App() {
   if (view === 'admin') {
     return (
       <div className="app">
-        <header>
-          <div><h1>₿ Cripto en Vivo</h1><p>Precios reales desde el servidor · React + Node · {VERSION_LABEL}</p></div>
+        <header className="topbar">
+          <div className="brand-row"><h1>₿ Cripto en Vivo</h1><span className="version-pill">{VERSION_LABEL}</span></div>
           <div className="row">
             {user ? (
               <>
@@ -634,20 +609,27 @@ export default function App() {
             <div className="row"><button onClick={goApp}>← Volver a la app</button></div>
           </section>
         )}
-        <footer>Fuente de datos: APIs públicas de Coinbase, Kraken, Binance US y CoinGecko, consultadas por el servidor. {APP_URL}</footer>
+        <footer>Fuente de datos: APIs públicas de Coinbase, Kraken, Binance US y CoinGecko. {APP_URL}</footer>
       </div>
     );
   }
 
   return (
     <div className="app">
-      <header>
-        <div><h1>₿ Cripto en Vivo</h1><p>{VERSION_LABEL}</p></div>
+      <header className="topbar">
+        <div className="brand-row">
+          <h1>₿ Cripto en Vivo</h1>
+          <span className="version-pill">{VERSION_LABEL}</span>
+        </div>
+        <div className="window-pill">
+          <span className="muted">Cierre 15m:</span>
+          <b className="countdown">{fmtCountdown(kalshiWin.remainingMs)}</b>
+        </div>
         <div className="row">
           {!user ? (
             <>
               <button onClick={() => { setShowAuth('login'); setAuthError(''); }}>Entrar</button>
-              <button onClick={() => { setShowAuth('register'); setAuthError(''); }}>Crear cuenta</button>
+              <button className="primary" onClick={() => { setShowAuth('register'); setAuthError(''); }}>Crear cuenta</button>
             </>
           ) : (
             <>
@@ -667,16 +649,16 @@ export default function App() {
 
       {error && <div className="error">No se pudo cargar desde el servidor: {error}. Revisa que el servidor esté corriendo (npm run dev en la carpeta raíz).</div>}
 
-        <section className={`card verdict-card kalshi-card verdict-${kalshiVerdict.key === 'up' ? 'buy' : kalshiVerdict.key === 'down' ? 'sell' : 'wait'}`} aria-label="Modo Kalshi 15 minutos">
-          <MyPosition user={user} realDecisions={realDecisions} brtiArgs={brtiArgs} fmt={fmt} />
-          <Decision user={user} firstRealDecision={firstRealDecision} liveDecisionNow={liveDecisionNow} marketRec={marketRec} kalshiScore={kalshiScore} kalshiReasons={kalshiReasons} marketMovement={marketMovement} betPlan={betPlan} />
-          <LiveReference symbol={symbol} currency={currency} kalshiWin={kalshiWin} kalshiTargetPrice={kalshiTargetPrice} kalshiMarket={kalshiMarket} kalshiPrice={kalshiPrice} kalshiRefSource={kalshiRefSource} brti={brti} brtiDiff={brtiDiff} brtiDiffPct={brtiDiffPct} fmt={fmt} user={user} marketMovement={marketMovement} />
-          <Signals kalshiVerdict={kalshiVerdict} kalshiWeakSignal={kalshiWeakSignal} kalshiScore={kalshiScore} kalshiProbAdj={kalshiProbAdj} kalshiBacktest={kalshiBacktest} kalshiRecent={kalshiRecent} kalshiReasons={kalshiReasons} kalshiEntryPrice={kalshiEntryPrice} onKalshiEntryPrice={setKalshiEntryPrice} kalshiDir={kalshiDir} onKalshiDir={setKalshiDir} kalshiAmount={kalshiAmount} onKalshiAmount={setKalshiAmount} onSaveKalshiPosition={setKalshiPosition} onClearKalshiPosition={clearKalshiPosition} kalshiMsg={kalshiMsg} kalshiDecision={kalshiDecision} kalshiPrice={kalshiPrice} kalshiEntryNum={kalshiEntryNum} kalshiExitPrice={kalshiExitPrice} kalshiAtr={kalshiAtr} currency={currency} currencySym={CUR[currency]} fmt={fmt} marketMovement={marketMovement} />
-          <ChartSection chartRef={chartRef} candles={candles} candlesError={candlesError} />
-          <AccountBox user={user} token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} kalshiPrice={kalshiPrice} kalshiRefPrice={kalshiRefPrice} kalshiRefSource={kalshiRefSource} currency={currency} onLogout={handleLogout} onRealDecision={handleRealDecisions} onShowAuth={(m) => { setShowAuth(m); setAuthError(''); }} />
-        </section>
+      <section className="terminal-grid" aria-label="Modo Kalshi 15 minutos">
+        <MyPosition user={user} realDecisions={realDecisions} brtiArgs={brtiArgs} fmt={fmt} />
+        <Decision user={user} firstRealDecision={firstRealDecision} liveDecisionNow={liveDecisionNow} marketRec={marketRec} kalshiScore={kalshiScore} kalshiReasons={kalshiReasons} marketMovement={marketMovement} betPlan={betPlan} />
+        <LiveReference symbol={symbol} currency={currency} kalshiWin={kalshiWin} kalshiTargetPrice={kalshiTargetPrice} kalshiMarket={kalshiMarket} kalshiPrice={kalshiPrice} kalshiRefSource={kalshiRefSource} brti={brti} brtiDiff={brtiDiff} brtiDiffPct={brtiDiffPct} fmt={fmt} user={user} marketMovement={marketMovement} />
+        <Signals kalshiVerdict={kalshiVerdict} kalshiWeakSignal={kalshiWeakSignal} kalshiScore={kalshiScore} kalshiProbAdj={kalshiProbAdj} kalshiBacktest={kalshiBacktest} kalshiRecent={kalshiRecent} kalshiReasons={kalshiReasons} kalshiEntryPrice={kalshiEntryPrice} onKalshiEntryPrice={setKalshiEntryPrice} kalshiDir={kalshiDir} onKalshiDir={setKalshiDir} kalshiAmount={kalshiAmount} onKalshiAmount={setKalshiAmount} onSaveKalshiPosition={setKalshiPosition} onClearKalshiPosition={clearKalshiPosition} kalshiMsg={kalshiMsg} kalshiDecision={kalshiDecision} kalshiPrice={kalshiPrice} kalshiEntryNum={kalshiEntryNum} kalshiExitPrice={kalshiExitPrice} kalshiAtr={kalshiAtr} currency={currency} currencySym={CUR[currency]} fmt={fmt} marketMovement={marketMovement} />
+        <ChartSection chartRef={chartRef} candles={candles} candlesError={candlesError} />
+        <AccountBox user={user} token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} kalshiPrice={kalshiPrice} kalshiRefPrice={kalshiRefPrice} kalshiRefSource={kalshiRefSource} currency={currency} onLogout={handleLogout} onRealDecision={handleRealDecisions} onShowAuth={(m) => { setShowAuth(m); setAuthError(''); }} />
+      </section>
 
-      <footer>Fuente de datos: APIs públicas de Coinbase, Kraken, Binance US y CoinGecko, consultadas por el servidor. Precios en vivo, no inventados. {APP_URL}</footer>
+      <footer>Fuente de datos: APIs públicas de Coinbase, Kraken, Binance US y CoinGecko, consultadas por el servidor. {APP_URL}</footer>
     </div>
   );
 }

@@ -66,8 +66,8 @@ check('Decision.jsx pinta la etiqueta por prop, no hardcodeada en la vista', dec
   // Dos usos de la caja: rama sin sesión y rama sin posición; con posición
   // abierta no aparece (la decisión real va después y no hay caja tras ella).
   const usages = [...decision.matchAll(/<MarketRecBox marketRec=\{marketRec\}/g)].map((m) => m.index);
-  const noPosIdx = decision.indexOf('Sin posición abierta en Kalshi ahora mismo: no hay decisión que tomar');
-  const noUserIdx = decision.indexOf('Entra y conecta Kalshi para que la app te diga');
+  const noPosIdx = decision.indexOf('Sin posición abierta en Kalshi ahora mismo: no hay decisión que tomar sobre una posición');
+  const noUserIdx = decision.indexOf('arriba tienes la apuesta recomendada ahora mismo');
   const liveIdx = decision.indexOf('liveDecisionNow ? (');
   // v15.4: la caja va PRIMERO en cada rama sin posición (antes del texto
   // explicativo), por eso los usos quedan ANTES de noUserIdx/noPosIdx.
@@ -75,7 +75,7 @@ check('Decision.jsx pinta la etiqueta por prop, no hardcodeada en la vista', dec
     usages.length === 2 && usages[0] < noUserIdx && usages[1] < noPosIdx && usages[1] < liveIdx);
 }
 check('la caja de recomendación lleva fuerza y razones de la señal',
-  decision.includes('Fuerza de la señal 15m:') && decision.includes('kalshiReasons'));
+  decision.includes('Fuerza 15m:') && decision.includes('kalshiReasons'));
 check('§2 sigue diciendo "sin posición abierta" y no inventa decisión de posición',
   mainReturn.includes('Sin posición abierta en Kalshi ahora mismo: no hay decisión que tomar'));
 check('la recomendación dice que es sugerencia educativa, no orden ni garantía',
@@ -88,7 +88,7 @@ console.log('v15.3 — reorganización: orden urgente-primero y componentes');
   const i1 = mainReturn.indexOf('1 · Mi posición en vivo');
   const i2 = mainReturn.indexOf('2 · Decisión');
   const i3 = mainReturn.indexOf('3 · Referencia en tiempo real');
-  const i4 = mainReturn.indexOf('4 · Señales del mercado');
+  const i4 = mainReturn.indexOf('4 · Radar de Señales');
   const i5 = mainReturn.indexOf('5 · Gráfica · BTC 15m');
   check('orden §1 posición < §2 decisión < §3 referencia < §4 señales < §5 gráfica', i1 > 0 && i1 < i2 && i2 < i3 && i3 < i4 && i4 < i5);
 }
@@ -128,9 +128,9 @@ check('dist/index.html existe y referencia un bundle', Boolean(bundleMatch));
 if (bundleMatch) {
   const bundle = readFileSync(path.join(ROOT, 'client/dist/assets', bundleMatch[1]), 'utf8');
   check('bundle distinto al de v15.2 (index-DxgRBFRC.js)', bundleMatch[1] !== 'index-DxgRBFRC.js');
-  // v15.5: la etiqueta de versión del bundle avanzó a v15.5 (antes v15.3); el check
+  // v16.0: la etiqueta de versión del bundle avanzó a v16.0 (antes v15.5); el check
   // busca la etiqueta actual, no la vieja.
-  check('bundle trae la etiqueta de versión actual (v15.5)', bundle.includes('v15.5'));
+  check('bundle trae la etiqueta de versión actual (v16.0)', bundle.includes('v16.0'));
   check('bundle trae "Apuesta a la SUBIDA" y "Apuesta a la BAJADA"',
     bundle.includes('Apuesta a la SUBIDA') && bundle.includes('Apuesta a la BAJADA'));
   check('bundle trae el orden nuevo (1 · Mi posición)', bundle.includes('1 · Mi posición en vivo'));

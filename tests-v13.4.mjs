@@ -133,8 +133,8 @@ ok('servidor Kalshi devuelve los fills normalizados', kalshiServerSrc.includes('
 
 // ---------- 5. Versión ----------
 console.log('— versión —');
-ok('VERSION.txt empieza por v15', versionTxt.startsWith('v15'));
-ok('VERSION_LABEL v15 en App.jsx', appSrc.includes("VERSION_LABEL = 'v15"));
+ok('VERSION.txt empieza por v16', versionTxt.startsWith('v16'));
+ok('VERSION_LABEL v16 en App.jsx', appSrc.includes("VERSION_LABEL = 'v16"));
 
 // ---------- 1 y 3 [vivo]: velas reales + cambio 24h unificado ----------
 console.log('— [vivo] velas reales 15m y cambio 24h unificado —');

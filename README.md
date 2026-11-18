@@ -277,6 +277,20 @@ ofrece un apodo local (sin contraseña, sin servidor).
   local" (sin contraseña, sin servidor), que se usa en la liga semanal
   y en la tarjeta para compartir. Nada se envía a ningún servidor.
 
+## Novedades v16.0: Terminal Táctica Kalshi BTC 15m — rediseño total de la interfaz, motor intacto (18-nov-2026)
+
+Rediseño completo de la pantalla (versión mejorada enviada por Luis), sin tocar el motor de la señal ni el servidor:
+
+1. **Hero de Apuesta y Decisión al frente (§2):** tarjeta de alto contraste con 3 KPI: qué contrato apostar (SÍ/NO), precio en centavos + ganancia + ROI %, y plan operativo (Cobrar ≥85¢ · Cortar ≤15¢). Con posición abierta, SAL/AGUANTA/INVIERTE MÁS también va en hero.
+2. **Termómetro de Liquidación en 4 celdas (§3):** Cierra en / Precio objetivo / Promedio de 60 s (el que liquida) / Precio SÍ·NO, con la diferencia contra el objetivo y el colchón en ATR 15m.
+3. **Radar de Movimiento (§4):** impulso en vivo (-100 a +100), vela 15m actual, avance 3 velas, alineación temporal y matriz visual de los 4 plazos (1m/5m/15m/1h). El simulador manual pasa a un cajón plegado.
+4. **Gráfica:** EMA 9 rápida (violeta) junto a EMA 20, EMA 50 y Bollinger; barra superior con la cuenta atrás de la ventana.
+5. **CSS limpio:** clases muertas eliminadas (.tape, .heatmap, .achievements, .mood-bar, .screener, .app-tabs) y tema oscuro táctico.
+
+**Verificación (Muse, 18-nov-2026):** el motor NO cambia — `kalshi.js`, `analysis.js`, `verdict.js`, `windowOutcome.js` y el servidor son idénticos a v15.5 (diff 0); el backtest honesto 15m sigue en ~46% (medido en v15.5). Solo se copiaron del ZIP los 6 archivos con cambios reales; no se copiaron sus tests viejos (traían el recuento con lookahead ya corregido en v15.5) ni su README/VERSION (viejos). Correcciones al verificar: (a) restaurado en la caja de apuesta el aviso explícito de que la ventaja (Edge/EV) se calcula con la probabilidad ESTIMADA, no con el acierto MEDIDO (~46%); (b) restauradas en §4 la lista de razones de la señal y el pie de que el índice NO es una probabilidad de ganar (el ZIP los quitaba); (c) reescrita la palabra "compacto" en dos comentarios, que rompía un check de v13.3.
+
+Pruebas: build sin errores; `tests-v16.mjs` (nueva) 8/8; `npm test` 17/17; suites viejas sin regresiones: v15.5 22/22, v15.4 23/23, v15.3 52/52, v15 52/52, v15.1 30/30, v14 49/49, v13.4 46/46 (+1 saltado sin servidor), v13.3 29/29, v13.2 58/58, v13.1 13/13. v13/v9/v10/v11 se corren con servidor local (ver abajo).
+
 ## Novedades v15.5: movimientos del mercado en tiempo real + plan exacto de apuesta SÍ/NO (18-nov-2026)
 
 1. **Desbloqueo del tiempo real en 15m y multitemporal (`App.jsx`):** `candles15m` ahora prioriza `candles` (que se mueve cada 1 segundo con cada tick de precio vía `updateLastCandle`) y `last15mKey` usa `candlesSignature(candles15m)` (con `open/high/low/close`). Además `setMtfCandles` usa `candlesSignature` en `1m`, `5m`, `15m` y `1h` para no congelar las velas dentro de la ventana.
