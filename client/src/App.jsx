@@ -19,7 +19,7 @@ import AuthModal from './components/AuthModal.jsx';
 
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v15.3 — Lo urgente primero: posición, decisión, referencia, señales, gráfica';
+const VERSION_LABEL = 'v15.3.1 — Corrección pantalla en blanco (v15.3) + gráfica con locale fijo';
 
 // v15.2: setInterval que no consulta al servidor con la pestaña oculta y se
 // pone al día en cuanto vuelves a ella. Devuelve la función que lo detiene.
@@ -259,6 +259,14 @@ export default function App() {
   // (v12, pullOrPushServerData + subida con debounce) sigue usándolo,
   // y las alertas guardadas siguen sonando con cada tick (efecto de
   // abajo). Sin estado no habría nada que sincronizar.
+  // v15.3.1: estas dos declaraciones se borraron por error en la
+  // limpieza de v15.3 y la app quedaba en blanco con
+  // "ReferenceError: priceAlerts is not defined" al renderizar
+  // (línea de priceAlertsRef, durante el primer render). Restauradas
+  // tal como estaban en v15.2; el build de Vite NO detecta variables
+  // no declaradas, por eso pasó desapercibido.
+  const [portfolio, setPortfolio] = useState(() => loadLS('cev_portfolio_v1', { cash: START_CASH, holdings: {}, trades: [] }));
+  const [priceAlerts, setPriceAlerts] = useState(() => dedupePriceAlerts(loadLS('cev_price_alerts_v1', [])));
   const priceAlertsRef = useRef(priceAlerts);
   priceAlertsRef.current = priceAlerts;
   // v9: anti-duplicados de alertas. Cada alerta que suena queda anotada
@@ -623,6 +631,11 @@ export default function App() {
       layout: { background: { color: '#0b0f14' }, textColor: '#cbd5e1' },
       grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
       timeScale: { timeVisible: true, secondsVisible: false },
+      // v15.3.1: locale explícito. Sin él, lightweight-charts usa
+      // navigator.language y en navegadores con locale raro
+      // (p. ej. "en-US@posix") rompe con "Invalid language tag" y la
+      // gráfica queda vacía. La app ya formatea todo en es-US.
+      localization: { locale: 'es-US' },
     });
     chartObj.current = chart;
     candleSeries.current = chart.addCandlestickSeries({ upColor: '#22c55e', downColor: '#ef4444', wickUpColor: '#22c55e', wickDownColor: '#ef4444' });

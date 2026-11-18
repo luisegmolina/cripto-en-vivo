@@ -277,6 +277,20 @@ ofrece un apodo local (sin contraseña, sin servidor).
   local" (sin contraseña, sin servidor), que se usa en la liga semanal
   y en la tarjeta para compartir. Nada se envía a ningún servidor.
 
+## Novedades v15.3.1: corrección de la pantalla en blanco de v15.3 (18-nov-2026, URGENTE)
+
+Luis reportó a las 23:53 CST que la web se quedaba en blanco y no cargaba. Reproducido en navegador real (Chromium headless, bundle de producción servido): `#root` vacío y consola `ReferenceError: priceAlerts is not defined`.
+
+**Causa:** la limpieza de v15.3 borró por error las declaraciones de estado `portfolio` y `priceAlerts` de `App.jsx`, pero dejó 6+ usos: `priceAlertsRef = useRef(priceAlerts)` (línea 262, se ejecuta en el primer render y rompe toda la app), los efectos que guardan/sincronizan cartera y alertas, `pullOrPushServerData` y el efecto de alertas por tick. El comentario en el código decía que el estado "se conserva", pero las dos líneas `useState` no estaban. El build de Vite NO detecta variables no declaradas — misma clase de fallo que v13.1 (`prevVerdictKey`) — por eso pasó todos los tests y el build.
+
+**Corrección (cambio mínimo):** restauradas las dos declaraciones tal como estaban en v15.2, antes de `priceAlertsRef`:
+- `const [portfolio, setPortfolio] = useState(() => loadLS('cev_portfolio_v1', { cash: START_CASH, holdings: {}, trades: [] }));`
+- `const [priceAlerts, setPriceAlerts] = useState(() => dedupePriceAlerts(loadLS('cev_price_alerts_v1', [])));`
+
+**Extra (misma verificación):** la gráfica quedaba vacía en el navegador de pruebas con `RangeError: Invalid language tag: en-US@posix` (lightweight-charts usa `navigator.language` y ese entorno tiene un locale roto). En un teléfono normal no pasa, pero se blindó con `localization: { locale: 'es-US' }` explícito en `createChart`.
+
+**Verificación:** build sin errores (bundle nuevo `index-BqNnHKN8.js`); en Chromium real la página ya carga: se ven §1 posición, §2 decisión (caja "ESPERAR" sin posición), §3 referencia (objetivo Kalshi en vivo $64,611.64, SÍ 26¢ / NO 75¢), §4 señales y §5 gráfica; `tests-v15.3.1.mjs` nuevo (5 tests de regresión); suites viejas sin regresiones (ver VERSION.txt). Escaneo AST de todo el frontend: no quedan más variables sin declarar (los 10 avisos restantes eran falsos positivos: propiedades de `?.` y `ResizeObserver`).
+
 ## Novedades v15.3: reorganización del frontend + recomendación sin posición (17-nov-2026)
 
 Pedido de Luis: reorganizar el frontend, limpiar, eliminar lo que sobra y que la interfaz se entienda en 3 segundos. Pedido nuevo en la misma versión: cuando no hay posiciones abiertas, el mercado debe decir claramente a qué apostar.
