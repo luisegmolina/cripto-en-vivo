@@ -6,6 +6,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { brtiWinning, brtiPositionOutcome, estimateSettlementPnl, liveDecision } from './client/src/kalshi.js';
+import { frontendSrc, mainReturnSrc } from './frontendSrc.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const src = (p) => readFileSync(path.join(ROOT, p), 'utf8');
@@ -72,35 +73,36 @@ check('sin promedio (winning null) -> AGUANTA CON CUIDADO y lo dice por el prome
 check('sin señal clara + perdiendo -> AGUANTA CON CUIDADO, no SAL inventado',
   liveDecision({ winning: false, signalKey: 'wait', signalScore: 0, dir: 'up', contractCents: 50 }).label === 'AGUANTA CON CUIDADO');
 
-console.log('v15 — pantalla en orden §1-§5, lo primero arriba');
-const mainReturn = app.slice(app.lastIndexOf('  return (\n    <div className="app">'));
-const i1 = mainReturn.indexOf('1 · Referencia en tiempo real');
-const i2 = mainReturn.indexOf('2 · Mi posición en vivo');
-const i3 = mainReturn.indexOf('3 · Decisión');
+console.log('v15.3 — pantalla en orden §1-§5: lo urgente primero (posición, decisión), después el porqué (referencia, señales), al final la gráfica');
+const mainReturn = mainReturnSrc();
+const frontend = frontendSrc();
+const i1 = mainReturn.indexOf('1 · Mi posición en vivo');
+const i2 = mainReturn.indexOf('2 · Decisión');
+const i3 = mainReturn.indexOf('3 · Referencia en tiempo real');
 const i4 = mainReturn.indexOf('4 · Señales del mercado');
 const i5 = mainReturn.indexOf('5 · Gráfica · BTC 15m');
-check('orden §1 < §2 < §3 < §4 < §5', i1 > 0 && i1 < i2 && i2 < i3 && i3 < i4 && i4 < i5);
-check('§1: etiquetas claras "BRTI ahora" y "Promedio de 60 s (el que liquida)"',
+check('orden §1 posición < §2 decisión < §3 referencia < §4 señales < §5 gráfica', i1 > 0 && i1 < i2 && i2 < i3 && i3 < i4 && i4 < i5);
+check('§3: etiquetas claras "BRTI ahora" y "Promedio de 60 s (el que liquida)"',
   mainReturn.includes('BRTI ahora') && mainReturn.includes('Promedio de 60 s (el que liquida)'));
-check('§1: explica que el objetivo es el promedio de 60 s antes de la apertura y el cierre se compara con el promedio antes del cierre',
+check('§3: explica que el objetivo es el promedio de 60 s antes de la apertura y el cierre se compara con el promedio antes del cierre',
   mainReturn.includes('el objetivo es el promedio de 60 s antes de la apertura') && mainReturn.includes('el cierre se compara contra ese objetivo con el promedio de 60 s antes del cierre'));
-check('§1: NUNCA se usa el valor instantáneo como liquidación (sin fallback en el código)',
-  !app.includes('avg60s != null ? brti.avg60s : brti.value') && !app.includes('se usa el valor en vivo'));
-check('§1: referencia solo con promedio (brtiRefPrice = avg60s o null)',
+check('§3: NUNCA se usa el valor instantáneo como liquidación (sin fallback en el código)',
+  !frontend.includes('avg60s != null ? brti.avg60s : brti.value') && !frontend.includes('se usa el valor en vivo'));
+check('§3: referencia solo con promedio (brtiRefPrice = avg60s o null)',
   app.includes("brti.avg60s != null ? brti.avg60s : null"));
-check('§1: si no hay promedio, lo dice (sin diferencia ni ganar/perder inventados)',
+check('§3: si no hay promedio, lo dice (sin diferencia ni ganar/perder inventados)',
   mainReturn.includes('Promedio de 60 s no disponible'));
-check('§1: cuenta atrás, objetivo y SÍ/NO en la referencia',
+check('§3: cuenta atrás, objetivo y SÍ/NO en la referencia',
   mainReturn.includes('Cierra en') && mainReturn.includes('Precio objetivo (Kalshi)') && mainReturn.includes('Precio SÍ / NO (Kalshi)'));
-check('§2: posición real con lado, apuesta, medio, cantidad y P&L estimado según BRTI',
+check('§1: posición real con lado, apuesta, medio, cantidad y P&L estimado según BRTI',
   mainReturn.includes('Mi posición en vivo') && mainReturn.includes('P&L estimado si la ventana cerrara ahora según BRTI') && mainReturn.includes('Precio medio') && mainReturn.includes('Apuesta:'));
-check('§2: avisos VAS GANANDO / VAS PERDIENDO / PUEDES PERDER',
+check('§1: avisos VAS GANANDO / VAS PERDIENDO / PUEDES PERDER',
   mainReturn.includes('VAS GANANDO según BRTI') && mainReturn.includes('VAS PERDIENDO según BRTI') && mainReturn.includes('PUEDES PERDER'));
-check('§2: sin posición abierta, lo dice y no inventa',
+check('§1: sin posición abierta, lo dice y no inventa',
   mainReturn.includes('Sin posición abierta en Kalshi ahora mismo'));
-check('§3: SAL AHORA / AGUANTA / INVIERTE MÁS + aviso de más riesgo + sugerencia educativa',
+check('§2: SAL AHORA / AGUANTA / INVIERTE MÁS + aviso de más riesgo + sugerencia educativa',
   mainReturn.includes('SAL AHORA') && mainReturn.includes('AGUANTA') && mainReturn.includes('INVIERTE MÁS') && mainReturn.includes('Invertir más aumenta el riesgo') && mainReturn.includes('Sugerencia educativa, nunca una orden'));
-check('§3: sin posición no hay decisión inventada',
+check('§2: sin posición no hay decisión inventada',
   mainReturn.includes('Sin posición abierta en Kalshi ahora mismo: no hay decisión que tomar'));
 check('§4: veredicto SUBE/BAJA/ESPERAR con fuerza, confianza y porqué',
   mainReturn.includes('verdict-main') && mainReturn.includes('Fuerza:') && mainReturn.includes('Índice de coincidencia'));

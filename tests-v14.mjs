@@ -4,6 +4,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { mainReturnSrc } from './frontendSrc.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const app = readFileSync(path.join(ROOT, 'client/src/App.jsx'), 'utf8');
@@ -20,7 +21,7 @@ function check(name, ok, extra = '') {
 
 // La vista es el return principal de App (después del "return (" final
 // del componente, que es el de la app pública, no el de la vista admin).
-const mainReturn = app.slice(app.lastIndexOf('  return (\n    <div className="app">'));
+const mainReturn = mainReturnSrc();
 
 console.log('v14 — pantalla mínima: los 4 elementos presentes');
 check('1. Precio actual de Kalshi (BRTI en vivo)', mainReturn.includes('BRTI ahora'));
@@ -31,7 +32,7 @@ check('3b. Gráfica sin botones de intervalo (siempre 15m)', !mainReturn.include
 check('3c. Gráfica sin toggles EMA/Bollinger/RSI en la vista', !mainReturn.includes('EMA 20/50') && !mainReturn.includes('Bollinger') && !mainReturn.includes('RSI (panel)'));
 check('4. Señales: veredicto SUBE/BAJA/ESPERAR', mainReturn.includes('verdict-main') && mainReturn.includes('kalshiVerdict'));
 check('4b. Señales: ¿Cobro o me quedo?', mainReturn.includes('¿Cobro o me quedo?'));
-check('4c. Señales: decisión real en §3 por precio del contrato (v15)', mainReturn.includes('3 · Decisión') && mainReturn.includes('liveDecisionNow') && mainReturn.includes('Tu posición:'));
+check('4c. Señales: decisión real en §2 por precio del contrato (v15, v15.3: la decisión subió al segundo bloque)', mainReturn.includes('2 · Decisión') && mainReturn.includes('liveDecisionNow') && mainReturn.includes('Tu posición:'));
 
 console.log('v14 — lo demás ELIMINADO de la vista');
 const gone = [

@@ -61,7 +61,8 @@ check('Precio sugerido: AGUANTA -> entrada + 1 ATR',
   suggestedExitPrice({ decisionKey: 'hold', currentPrice: 73500, entryPrice: 73000, dir: 'up', atr15m: 50 }) === 73050);
 
 // --- 4) Código: modo Kalshi presente en App.jsx ---
-const src = fs.readFileSync('./client/src/App.jsx', 'utf8');
+import { frontendSrc } from './frontendSrc.mjs';
+const src = frontendSrc(); // v15.3: la vista vive en App.jsx + components/
 check('Código: interruptor Modo Kalshi 15 min', src.includes('Modo Kalshi 15 min'));
 check('Código: la app NO dice que sea la probabilidad oficial de Kalshi', src.includes('NO es la probabilidad oficial de Kalshi'));
 check('Código: sin integración con la API real de Kalshi', !src.includes('api.kalshi') && !src.includes('kalshi.com'));

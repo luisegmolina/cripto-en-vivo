@@ -8,11 +8,13 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { cashOutDecision, cashOutDecisionReal, estimateSettlementPnl, liveDecision } from './client/src/kalshi.js';
+import { frontendSrc } from './frontendSrc.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const src = (p) => readFileSync(path.join(ROOT, p), 'utf8');
 const app = src('client/src/App.jsx');
+const frontend = frontendSrc();
 const kc = src('client/src/KalshiConnect.jsx');
 const kalshi = src('client/src/kalshi.js');
 const brtiServer = src('server/brti.js');
@@ -29,9 +31,9 @@ function check(name, ok, extra = '') {
 // el build pasaba con un aviso de esbuild ("}" no válido en JSX) y el
 // texto se veía en pantalla. Corregido: texto duplicado eliminado.
 console.log('FALLO 1 — texto suelto tras el comentario de §5 (VERDADERO, build solo avisaba)');
-check('el texto "Sin botones de intervalo" aparece UNA sola vez (dentro del comentario)', (app.match(/Sin botones\s+de intervalo/g) || []).length === 1);
-check('no queda el cierre suelto "llegaron. */}" seguido de texto duplicado', !/llegaron\. \*\/}\s*\n\s*Sin botones/.test(app));
-check('el comentario de §5 sigue (no se borró de más)', app.includes('v15: §5 GRÁFICA'));
+check('el texto "Sin botones de intervalo" aparece UNA sola vez (dentro del comentario)', (frontend.match(/Sin botones\s+de intervalo/g) || []).length === 1);
+check('no queda el cierre suelto "llegaron. */}" seguido de texto duplicado', !/llegaron\. \*\/}\s*\n\s*Sin botones/.test(frontend));
+check('el comentario de §5 sigue (no se borró de más)', frontend.includes('v15: §5 GRÁFICA'));
 
 // --- FALLO 2: FALSO — el P&L del NO ya era correcto ---
 // El precio actual es el precio DEL LADO que tienes: el servidor
@@ -89,7 +91,7 @@ check('el sondeo retenido marca el dato como desactualizado (stale: true)', app.
 console.log('FALLO 5 — re-renders por [activeTab, symbol, user] (FALSO: activeTab es constante)');
 check("activeTab es una constante 'kalshi', no hay pestañas", app.includes("const activeTab = 'kalshi'"));
 check('el efecto BRTI depende de user?.id (no del objeto user entero)', /visibleInterval\(load, 2000\)[\s\S]{0,200}\}, \[activeTab, symbol, user\?\.id\]\)/.test(app));
-check('el apodo vive en localStorage, no en el objeto user', app.includes("saveLS('cev_profile_v1'"));
+check('v15.3: perfil local eliminado con la liga (sin apodo, sin cev_profile_v1 ni liga privada)', !app.includes("cev_profile_v1") && !app.includes('cev_private_league_v1') && !frontend.includes('Tu perfil local'));
 
 // --- Error extra del código pegado: SAL AHORA en verde ---
 // liveDecision devolvía SAL AHORA con color #22c55e (verde) cuando

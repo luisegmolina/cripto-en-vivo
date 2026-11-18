@@ -8,7 +8,7 @@
 // comprueban de forma explícita.
 // Uso: node tests-v13.1.mjs  (después de npm --prefix client run build)
 
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { shouldSignalAlert, SIGNAL_ALERT_MIN_MS } from './client/src/alerts.js';
 
 let pass = 0, fail = 0;
@@ -30,14 +30,22 @@ check('las declaraciones están ANTES del efecto que las usa',
 //    igual que el que encontró el bug: todo X.current debe tener
 //    "const X =" en el mismo archivo, o ser parámetro de función).
 {
-  const files = readdirSync('./client/src').filter((f) => /\.(jsx?|js)$/.test(f));
+  // v15.3: escaneo recursivo (App.jsx + client/src/components/).
+  const walk = (dir) => readdirSync(dir).flatMap((f) => {
+    const p = `${dir}/${f}`;
+    return statSync(p).isDirectory() ? walk(p) : [/\.(jsx?|js)$/.test(f) ? p : null].filter(Boolean);
+  });
+  const files = walk('./client/src');
   const missing = [];
   for (const f of files) {
-    const src = readFileSync(`./client/src/${f}`, 'utf8');
+    const src = readFileSync(f, 'utf8');
     const used = [...new Set([...src.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\.current/g)].map((m) => m[1]))];
     for (const v of used) {
       const declared = new RegExp(`(const|let|var)\\s+${v}\\s*=`).test(src);
-      const param = new RegExp(`\\(\\s*${v}\\b|\\b${v}\\s*=>|function\\s+\\w+\\s*\\(\\s*${v}\\b`).test(src);
+      // v15.3: las props desestructuradas (`function Decision({ ..., firstRealDecision, ... })`)
+      // también cuentan como declaradas; sin esto, `firstRealDecision.currentPriceCents`
+      // (propiedad, no ref) daba un falso positivo.
+      const param = new RegExp(`\\(\\s*${v}\\b|\\b${v}\\s*=>|function\\s+\\w+\\s*\\(\\s*${v}\\b|function\\s+\\w+\\s*\\(\\s*\\{[^}]*\\b${v}\\b`).test(src);
       if (!declared && !param) missing.push(`${f}:${v}`);
     }
   }

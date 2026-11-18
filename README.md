@@ -277,6 +277,46 @@ ofrece un apodo local (sin contraseña, sin servidor).
   local" (sin contraseña, sin servidor), que se usa en la liga semanal
   y en la tarjeta para compartir. Nada se envía a ningún servidor.
 
+## Novedades v15.3: reorganización del frontend + recomendación sin posición (17-nov-2026)
+
+Pedido de Luis: reorganizar el frontend, limpiar, eliminar lo que sobra y que la interfaz se entienda en 3 segundos. Pedido nuevo en la misma versión: cuando no hay posiciones abiertas, el mercado debe decir claramente a qué apostar.
+
+**Interfaz — nuevo orden (lo urgente primero):**
+
+1. **§1 Mi posición en vivo**: ¿voy ganando o perdiendo? P&L estimado grande (VAS GANANDO / VAS PERDIENDO / PUEDES PERDER).
+2. **§2 Decisión**: SAL AHORA / AGUANTA / INVIERTE MÁS, y sin posición, la recomendación del mercado (abajo).
+3. **§3 Referencia en tiempo real**: BRTI ahora, promedio de 60 s (el que liquida), diferencia contra el objetivo, cuenta atrás, precio objetivo y SÍ/NO.
+4. **§4 Señales del mercado**: veredicto SUBE/BAJA/ESPERAR 15m, fuerza, índice de coincidencia, aviso de señal débil, backtest 15m y ¿Cobro o me quedo? (virtual).
+5. **§5 Gráfica**: velas BTC 15m al final. Después, la cuenta Kalshi colapsada (`<details>`), como antes.
+
+Textos recortados: fuera el "% de ventana transcurrida", la apertura orientativa de Coinbase, el párrafo largo del objetivo y la línea larga de la fuente BRTI. Un solo número grande por sección, ancho máximo 720 px y formularios a ancho completo en el móvil (sin scroll horizontal ni zoom). El aviso único de solo lectura y el del backtest 15m se mantienen.
+
+**Recomendación sin posición — "Apuesta a la SUBIDA" / "Apuesta a la BAJADA" / "ESPERAR":**
+
+- La §2 sigue diciendo "sin posición abierta" y **no inventa ninguna decisión de posición** (SAL/AGUANTA). Pero en una caja aparte, bien visible, muestra lo que dice el mercado: la señal 15m traducida a lenguaje directo, con su fuerza y sus razones.
+- Nueva función pura `marketRecommendation` (`kalshi.js`): señal clara alcista → **Apuesta a la SUBIDA**; clara bajista → **Apuesta a la BAJADA**; señal no clara → **ESPERAR**. Si la señal es débil (acierta menos del 50% en las últimas ventanas con señal clara) o conflictiva (la mayoría de los demás plazos van en contra de la señal 15m) → **ESPERAR, nunca inventa un lado**.
+- Sigue siendo **sugerencia educativa, nunca una orden ni una garantía** (lo dice la caja; se mantiene el aviso del backtest 15m: 13 de 29 = 45%, IC 95% Wilson 28–62%, no se distingue de una moneda). Con posición abierta la caja **no** aparece: manda la decisión de la posición.
+
+**Código — App.jsx partida en componentes:**
+
+- `client/src/components/` nuevos: `LiveReference`, `MyPosition`, `Decision`, `Signals`, `ChartSection`, `AccountBox`, `AuthModal`. App.jsx queda como orquestador (estado, sondeos, efectos de datos y gráfico, vista admin) y pasa datos por props. App.jsx: 1.555 → ~790 líneas. La lógica y los nombres de las funciones puras de `kalshi.js` / `windowOutcome.js` no cambian; el backend no se toca.
+- Las suites viejas ahora leen la fuente combinada (App.jsx + componentes en orden de pantalla) con el helper `frontendSrc.mjs` (`frontendSrc()` / `mainReturnSrc()`). Solo se actualizaron aserciones de textos/orden que el rediseño cambia por diseño:
+  - v15: orden nuevo §1-§5 y renumeración (§1 posición, §2 decisión, §3 referencia).
+  - v14: la decisión real ahora está en §2.
+  - v13.4: backtest/historial 1h eliminados (no se mostraban desde v14) y `onRealDecision` ahora llega a KalshiConnect vía `AccountBox`.
+  - v13.3: orden de secciones con la numeración nueva.
+  - v15.1: perfil local eliminado con la liga; el comentario de §5 vive ahora en `ChartSection.jsx`.
+  - v13.1: el escaneo de `X.current` sin declarar ahora es recursivo (cubre `components/`); se reconoció como prop desestructurada para no dar un falso positivo con `firstRealDecision.currentPriceCents` (nombre de propiedad, no ref).
+  - v11: la fuente pasa a ser la combinada (dos checks que leían solo App.jsx: la frase "NO es la probabilidad oficial" y la sección ¿Cobro o me quedo?).
+
+**Qué se eliminó de App.jsx** (verificado con grep, nada de lo eliminado se referencia en otro sitio): cartera virtual, liga semanal y privada, misiones/XP/logros/racha, perfil local/apodo, screener, compartir, panel PRO/mercado (`/api/global`, miedo, calor), backtest e historial 1h, toggles de gráfico (EMA y Bollinger quedan siempre visibles; RSI y comparar eliminados), `testServer`/`askNotif` y estados de depuración, `Sparkline`, `genCode`, `localDay`, `fmtNum`, `ASSETS`, `INTERVALS`, `ACHIEVEMENTS`. Los módulos `client/src/*.js` (`missions.js`, `screener.js`, `marketPro.js`, `shareCard.js`, `backtest.js`, `alerts.js`, etc.) **se quedan en disco**: las suites viejas los importan directamente y son código puro probado, no código de la vista.
+
+**Qué se conserva a propósito:** sincronización cartera/alertas con el servidor (v12), alertas de precio guardadas (siguen sonando con cada tick), alerta de cambio de veredicto (una por minuto), vista Admin (`#admin`), KalshiConnect mínimo en `<details>`, BRTI con promedio de 60 s, decisión SAL/AGUANTA/INVIERTE MÁS, aviso de solo lectura y aviso del backtest 15m.
+
+**No hecho (a propósito):** los efectos de creación/datos del gráfico (lightweight-charts) siguen en App.jsx — partirlos sin poder verificar el render en un navegador era arriesgado. Tampoco se limpiaron las clases CSS muertas (`.app-tabs`, `.tape`, `.league-table`, etc.): solo cosmético, queda pendiente.
+
+Pruebas: build sin errores ni avisos JSX; `tests-v15.3.mjs` (nueva) 52/52; `npm test` 17/17; suites viejas sin regresiones: v15 52/52, v15.1 30/30, v14 49/49, v13.4 56/56 (con servidor local; 46 + 1 saltado sin él), v13.3 29/29, v13.2 58/58, v13.5 42/42, v13.1 13/13, v13 36/36 (con servidor local), v9 21/21, v11 33/34 (con servidor; el 1 que falla es `setCandleInterval(kalshiMode ? '15m' : '1h')`, que ya fallaba desde v14 porque `kalshiMode` se eliminó al pasar a pantalla única). v10: 18 pasan, 8 fallan — los 8 afirman funciones eliminadas de la vista en v14 (liga, screener auto, backtest 1h, panel PRO) y ya fallaban antes de v15.3. v12 no se pudo correr aquí: exige `ADMIN_EMAIL_TEST`/`ADMIN_PASS_TEST` en el entorno (el backend no se tocó en v15.3).
+
 ## Novedades v15.2: parche externo verificado, sin aplicar a ciegas (17-nov-2026)
 
 Luis trajo un parche externo (v15.2, 988 líneas). Se aplicó con `git apply` tras verificar cada afirmación contra el código real. Veredicto:
@@ -819,7 +859,9 @@ cripto-en-vivo-react/
     ├── index.html
     └── src/
         ├── main.jsx
-        ├── App.jsx       # pestañas, precio, gráfico, alertas, cartera virtual, logros
+        ├── App.jsx       # orquestador: estado, sondeos, efectos de datos y gráfico, vista admin
+        ├── components/   # v15.3: LiveReference, MyPosition, Decision, Signals, ChartSection, AccountBox, AuthModal
+        ├── KalshiConnect.jsx # conexión Kalshi solo lectura (posiciones, saldo, historial)
         ├── liveCandle.js # vela en vivo con cada tick + merge con velas del servidor
         ├── analysis.js   # RSI, MACD, EMA, Bollinger, patrones de velas
         └── index.css     # estilo oscuro tipo terminal, responsivo
@@ -836,5 +878,5 @@ cripto-en-vivo-react/
 - Push real con servidor (VAPID): no implementado a propósito en el plan
   gratis de Render; las notificaciones actuales son locales vía service
   worker (ver sección v7, punto 6).
-- Liga con cuentas reales y rivales humanos: no existe; la liga actual es
-  demo/local por diseño (ver sección v7, punto 4).
+- Liga con cuentas reales y rivales humanos: no existe. La liga demo/local
+  se eliminó del todo en v15.3 (código y vista); no hay liga ni rivales.

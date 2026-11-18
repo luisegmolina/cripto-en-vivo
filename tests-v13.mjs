@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { window15m, recentWinRate, adjustProbForRecent, cashOutDecision } from './client/src/kalshi.js';
+import { frontendSrc } from './frontendSrc.mjs';
 import { shouldSignalAlert, dedupePriceAlerts } from './client/src/alerts.js';
 
 const require = createRequire(import.meta.url);
@@ -27,7 +28,7 @@ async function j(method, path, body) {
   return { status: r.status, data };
 }
 
-const appSrc = readFileSync('./client/src/App.jsx', 'utf8');
+const appSrc = frontendSrc();
 const kcSrc = readFileSync('./client/src/KalshiConnect.jsx', 'utf8');
 const cssSrc = readFileSync('./client/src/index.css', 'utf8');
 

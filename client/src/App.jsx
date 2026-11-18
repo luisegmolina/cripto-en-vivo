@@ -1,41 +1,25 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { createChart, LineStyle } from 'lightweight-charts';
-import { analyze, emaSeries, bollingerSeries, rsiSeries } from './analysis.js';
+import { createChart } from 'lightweight-charts';
+import { analyze, emaSeries, bollingerSeries } from './analysis.js';
 import { updateLastCandle, candlesSignature, mergeServerCandles } from './liveCandle.js';
-import { fearGreedEstimate, heatToday, isoWeekKey, rivalsForWeek } from './marketPro.js';
-import { backtestSignal } from './backtest.js';
 import { evaluateWindowSignal, backtestWindowSignal } from './windowOutcome.js';
-import { isCoinFlip } from './stats.js';
-import { multiTfVerdict, reasonsFor, tradePlan, signalHistory, atr, VERDICT_TFS } from './verdict.js';
-import { KALSHI_WINDOW_MS, window15m, fmtClock, fmtCountdown, kalshiVerdictForScore, strengthForScore, estimatedProb, adjustProbForRecent, recentWinRate, cashOutDecision, suggestedExitPrice, brtiPositionOutcome, estimateSettlementPnl, liveDecision } from './kalshi.js';
-import { MISSIONS, levelForXp, xpIntoLevel, XP_PER_LEVEL } from './missions.js';
-import { screenOpportunities } from './screener.js';
-import { shouldFireAlert, shouldSignalAlert, ALERT_COOLDOWN_MS, dedupePriceAlerts } from './alerts.js';
-import { shareText, whatsappUrl, drawShareCard, APP_URL } from './shareCard.js';
+import { multiTfVerdict, reasonsFor, atr, VERDICT_TFS } from './verdict.js';
+import { window15m, kalshiVerdictForScore, estimatedProb, adjustProbForRecent, recentWinRate, cashOutDecision, suggestedExitPrice, brtiPositionOutcome, estimateSettlementPnl, liveDecision, marketRecommendation } from './kalshi.js';
+import { shouldFireAlert, shouldSignalAlert, dedupePriceAlerts } from './alerts.js';
+import { APP_URL } from './shareCard.js';
 import { getToken, register, login, me, logout, apiAuth } from './auth.js';
 import AdminPanel from './AdminPanel.jsx';
-import KalshiConnect from './KalshiConnect.jsx';
+import LiveReference from './components/LiveReference.jsx';
+import MyPosition from './components/MyPosition.jsx';
+import Decision from './components/Decision.jsx';
+import Signals from './components/Signals.jsx';
+import ChartSection from './components/ChartSection.jsx';
+import AccountBox from './components/AccountBox.jsx';
+import AuthModal from './components/AuthModal.jsx';
 
-const ASSETS = [
-  { symbol: 'BTC', name: 'Bitcoin' }, { symbol: 'ETH', name: 'Ethereum' },
-  { symbol: 'SOL', name: 'Solana' }, { symbol: 'XRP', name: 'XRP' },
-  { symbol: 'ADA', name: 'Cardano' }, { symbol: 'DOGE', name: 'Dogecoin' },
-  { symbol: 'AVAX', name: 'Avalanche' }, { symbol: 'LINK', name: 'Chainlink' },
-  { symbol: 'LTC', name: 'Litecoin' }, { symbol: 'DOT', name: 'Polkadot' },
-];
-const INTERVALS = ['1m', '5m', '15m', '1h', '6h', '1d'];
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v15 — Referencia en vivo primero: BRTI, tu posición, decisión, señales, gráfica';
-
-const ACHIEVEMENTS = [
-  { id: 'primera_operacion', name: 'Primera operación virtual', desc: 'Compra o vende por primera vez con dinero virtual.' },
-  { id: 'primera_alerta', name: 'Primera alerta de precio', desc: 'Crea tu primera alerta de precio.' },
-  { id: 'racha_3', name: 'Racha de 3 días', desc: 'Abre la app 3 días seguidos.' },
-  { id: 'en_verde', name: 'En verde +2%', desc: 'Tu cartera virtual supera los 10.200.' },
-  { id: 'cazador_top', name: 'Cazador del top', desc: 'Compra el activo que más sube en 24 h.' },
-  { id: 'explorador', name: 'Explorador', desc: 'Mira los gráficos de 5 activos distintos.' },
-];
+const VERSION_LABEL = 'v15.3 — Lo urgente primero: posición, decisión, referencia, señales, gráfica';
 
 // v15.2: setInterval que no consulta al servidor con la pestaña oculta y se
 // pone al día en cuanto vuelves a ella. Devuelve la función que lo detiene.
@@ -64,10 +48,6 @@ function fmt(n, cur) {
   const dec = n < 10 ? 4 : n < 1000 ? 2 : 2;
   return new Intl.NumberFormat('es-US', { style: 'currency', currency: cur, minimumFractionDigits: dec, maximumFractionDigits: dec }).format(n);
 }
-function fmtNum(n, dec = 2) {
-  if (n == null || Number.isNaN(n)) return '—';
-  return Number(n).toLocaleString('es-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
-}
 function loadLS(key, fallback) {
   try {
     const raw = localStorage.getItem(key);
@@ -76,10 +56,6 @@ function loadLS(key, fallback) {
 }
 function saveLS(key, value) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
-}
-function localDay(offset = 0) {
-  const d = new Date(Date.now() + offset * 86400000);
-  return d.toLocaleDateString('en-CA');
 }
 function marketsSignature(markets) {
   if (!markets || !markets.length) return 'empty';
@@ -90,12 +66,6 @@ function sameTicker(a, b) {
   return a.price === b.price && a.source === b.source && a.updatedAt === b.updatedAt
     && a.high24h === b.high24h && a.low24h === b.low24h && a.open24h === b.open24h
     && a.volume24h === b.volume24h && a.change24h === b.change24h;
-}
-function genCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let out = '';
-  for (let i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)];
-  return out;
 }
 // Notificación: si hay service worker activo, la muestra él (llega
 // aunque la pestaña esté en segundo plano); si no, la clásica del
@@ -109,20 +79,6 @@ function notify(title, body) {
   } else {
     try { new Notification(title, { body }); } catch {}
   }
-}
-
-// Mini gráfico (sparkline) con los últimos precios recogidos en vivo.
-function Sparkline({ values, width = 120, height = 28 }) {
-  if (!values || values.length < 2) return <span className="spark-empty">—</span>;
-  const min = Math.min(...values), max = Math.max(...values);
-  const range = max - min || 1;
-  const pts = values.map((v, i) => `${(i / (values.length - 1)) * width},${height - 3 - ((v - min) / range) * (height - 6)}`).join(' ');
-  const up = values[values.length - 1] >= values[0];
-  return (
-    <svg className="spark" width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
-      <polyline points={pts} fill="none" stroke={up ? '#22c55e' : '#ef4444'} strokeWidth="2" strokeLinejoin="round" />
-    </svg>
-  );
 }
 
 export default function App() {
@@ -272,20 +228,9 @@ export default function App() {
   const [markets, setMarkets] = useState([]);
   const [ticker, setTicker] = useState(null);
   const [candles, setCandles] = useState([]);
-  const [source, setSource] = useState('');
-  const [updatedAt, setUpdatedAt] = useState('');
   const [error, setError] = useState('');
-  const [marketsError, setMarketsError] = useState('');
   const [candlesError, setCandlesError] = useState('');
-  const [serverStatus, setServerStatus] = useState('Comprobando…');
-  const [testResult, setTestResult] = useState('');
-  const [debugInfo, setDebugInfo] = useState('');
-  const [flash, setFlash] = useState('');
   const [alerts, setAlerts] = useState([]);
-  const [notif, setNotif] = useState(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
-  const [latencyMs, setLatencyMs] = useState(null);
-  const prevPrice = useRef(null);
-  const alertedKey = useRef('');
   const lastTicker = useRef(null);
   const lastMarketsSig = useRef('');
   const lastCandlesSig = useRef('');
@@ -303,37 +248,17 @@ export default function App() {
   const bbUpperSeries = useRef(null);
   const bbMiddleSeries = useRef(null);
   const bbLowerSeries = useRef(null);
-  const relSeries = useRef(null);
-  const rsiChartRef = useRef(null);
-  const rsiChartObj = useRef(null);
-  const rsiLineSeries = useRef(null);
-  const rsiHiSeries = useRef(null);
-  const rsiLoSeries = useRef(null);
   const candlesRef = useRef([]);
 
-  // --- Gráfico PRO: indicadores con toggle, comparar con BTC, pantalla completa ---
-  const [showEma, setShowEma] = useState(true);
-  const [showBoll, setShowBoll] = useState(true);
-  const [showRsi, setShowRsi] = useState(false);
-  const [compareBtc, setCompareBtc] = useState(false);
-  const [chartFull, setChartFull] = useState(false);
-  const [btcCandles, setBtcCandles] = useState([]);
+  // v15.3: la gráfica es siempre BTC 15m con EMA 20/50 y Bollinger:
+  // sin toggles, sin RSI, sin comparar con BTC ni pantalla completa.
 
-  // --- Enganche: cartera virtual, alertas de precio, racha, logros ---
-  const [portfolio, setPortfolio] = useState(() => loadLS('cev_portfolio_v1', { cash: START_CASH, holdings: {}, trades: [] }));
-  const [paperAmount, setPaperAmount] = useState('100');
-  const [paperMsg, setPaperMsg] = useState('');
-  // v10: migración al cargar. Las alertas guardadas antes de v9 no
-  // tenían cooldown ni anti-duplicados: en el navegador de Luis
-  // quedaron 4 entradas de la misma alerta (BTC por encima de $73.53).
-  // dedupePriceAlerts deja solo la más reciente por activo+precio+
-  // dirección y, si alguna copia ya sonó, la que queda queda sonada.
-  const [priceAlerts, setPriceAlerts] = useState(() => dedupePriceAlerts(loadLS('cev_price_alerts_v1', [])));
-  const [alertTarget, setAlertTarget] = useState('');
-  const [alertDir, setAlertDir] = useState('above');
-  const [streak, setStreak] = useState(() => loadLS('cev_streak_v1', { days: 0, totalDays: 0, lastVisit: '' }));
-  const [achievements, setAchievements] = useState(() => loadLS('cev_achievements_v1', []));
-  const [sparkHist, setSparkHist] = useState({});
+  // v15.3: la cartera virtual y las alertas de precio ya no tienen UI
+  // (se eliminaron de la vista en v14 y el código en v15.3), pero el
+  // ESTADO se conserva: la sincronización opcional con el servidor
+  // (v12, pullOrPushServerData + subida con debounce) sigue usándolo,
+  // y las alertas guardadas siguen sonando con cada tick (efecto de
+  // abajo). Sin estado no habría nada que sincronizar.
   const priceAlertsRef = useRef(priceAlerts);
   priceAlertsRef.current = priceAlerts;
   // v9: anti-duplicados de alertas. Cada alerta que suena queda anotada
@@ -349,46 +274,6 @@ export default function App() {
   const prevVerdictKey = useRef(null);
   const lastSignalAlertRef = useRef(null);
 
-  // --- Perfil local (sin login, sin servidor): solo un apodo ---
-  const [nickname, setNickname] = useState(() => (loadLS('cev_profile_v1', {}).nickname || ''));
-  const [nicknameInput, setNicknameInput] = useState(nickname);
-  const [profileMsg, setProfileMsg] = useState('');
-
-  // --- Liga semanal (demo/local) + liga privada con código ---
-  const weekKey = isoWeekKey();
-  const [leagueWeek, setLeagueWeek] = useState(() => loadLS('cev_league_week_v1', null));
-  const [privateLeague, setPrivateLeague] = useState(() => loadLS('cev_private_league_v1', null));
-  const [leagueNameInput, setLeagueNameInput] = useState('');
-  const [joinCodeInput, setJoinCodeInput] = useState('');
-  const [leagueMsg, setLeagueMsg] = useState('');
-
-  // --- Misiones diarias y XP ---
-  const [missionDay, setMissionDay] = useState(() => {
-    const s = loadLS('cev_missions_v1', null);
-    return s && s.date === localDay(0) ? s : { date: localDay(0), done: {} };
-  });
-  const [xpTotal, setXpTotal] = useState(() => loadLS('cev_xp_v1', 0));
-  const [visitedToday, setVisitedToday] = useState(() => {
-    const s = loadLS('cev_visited_today_v1', null);
-    return s && s.date === localDay(0) ? s : { date: localDay(0), symbols: [] };
-  });
-
-  // --- Screener / compartir ---
-  const [screenRows, setScreenRows] = useState({ opportunities: [], rest: [] });
-  const [screenLoading, setScreenLoading] = useState(false);
-  const [screenError, setScreenError] = useState('');
-  const [screenUpdatedAt, setScreenUpdatedAt] = useState('');
-  const [shareMsg, setShareMsg] = useState('');
-  const shareCanvasRef = useRef(null);
-
-  const unlock = (id) => {
-    setAchievements((prev) => {
-      if (prev.includes(id)) return prev;
-      const next = [...prev, id];
-      saveLS('cev_achievements_v1', next);
-      return next;
-    });
-  };
   useEffect(() => { saveLS('cev_portfolio_v1', portfolio); }, [portfolio]);
   useEffect(() => { saveLS('cev_price_alerts_v1', priceAlerts); }, [priceAlerts]);
 
@@ -404,57 +289,11 @@ export default function App() {
     return () => clearTimeout(t);
   }, [portfolio, priceAlerts, user]);
 
-  const completeMission = (id) => {
-    const today = localDay(0);
-    const base = missionDay.date === today ? missionDay : { date: today, done: {} };
-    if (base.done[id]) return;
-    const m = MISSIONS.find((x) => x.id === id);
-    const next = { date: today, done: { ...base.done, [id]: true } };
-    saveLS('cev_missions_v1', next);
-    setMissionDay(next);
-    if (m) setXpTotal((xp) => { const n = xp + m.xp; saveLS('cev_xp_v1', n); return n; });
-  };
-
-  // Racha de días abriendo la app (solo local, sin cuentas).
-  useEffect(() => {
-    const today = localDay(0), yesterday = localDay(-1);
-    const prev = loadLS('cev_streak_v1', { days: 0, totalDays: 0, lastVisit: '' });
-    if (prev.lastVisit === today) { setStreak(prev); return; }
-    const next = prev.lastVisit === yesterday
-      ? { days: prev.days + 1, totalDays: prev.totalDays + 1, lastVisit: today }
-      : { days: 1, totalDays: prev.totalDays + 1, lastVisit: today };
-    saveLS('cev_streak_v1', next);
-    setStreak(next);
-    if (next.days >= 3) unlock('racha_3');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Activos distintos visitados (logro Explorador + misión diaria).
-  useEffect(() => {
-    const visited = loadLS('cev_visited_v1', []);
-    if (!visited.includes(symbol)) {
-      const next = [...visited, symbol];
-      saveLS('cev_visited_v1', next);
-      if (next.length >= 5) unlock('explorador');
-    }
-    const today = localDay(0);
-    const vt = loadLS('cev_visited_today_v1', null);
-    const base = vt && vt.date === today ? vt : { date: today, symbols: [] };
-    if (!base.symbols.includes(symbol)) {
-      const next = { date: today, symbols: [...base.symbols, symbol] };
-      saveLS('cev_visited_today_v1', next);
-      setVisitedToday(next);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol]);
-
+  // v15.3: el análisis general solo alimenta los patrones del gráfico
+  // (marcadores de velas). El backtest/historial 1h se eliminó: no se
+  // mostraba desde v14 y la medida que manda es la 15m de Kalshi
+  // (backtestWindowSignal/evaluateWindowSignal, más abajo).
   const analysis = useMemo(() => analyze(candles), [candles]);
-  // El backtest y el historial se definen más abajo, tras mtfCandles:
-  // v10: SIEMPRE usan las velas de 1h, no las del intervalo del
-  // gráfico. Así, aunque el usuario cambie el gráfico a 1m para mirar
-  // velas, el backtest/historial siguen en 1h (el intervalo para
-  // decidir) y no vuelven a mostrar el 19% de 1m como ejemplo.
-  const lastCandleKey = candles.length ? `${candles.length}:${candles[candles.length - 1].time}` : 'empty';
 
   // --- v8: VEREDICTO multi-timeframe (1m, 5m, 15m, 1h) ---
   const [mtfCandles, setMtfCandles] = useState({});
@@ -467,22 +306,7 @@ export default function App() {
     return out;
   }, [mtfCandles, candles, candleInterval]);
   const mtfVerdict = useMemo(() => multiTfVerdict(mtfAnalysis), [mtfAnalysis]);
-  const verdictReasons = useMemo(() => reasonsFor(analysis), [analysis]);
-  const plan = useMemo(() => tradePlan(priceNowForPlan(), candles, mtfVerdict.verdict.key), [ticker, candles, mtfVerdict.verdict.key]);
-  // v10: backtest e historial SIEMPRE en 1h (velas de la confluencia,
-  // que ya se traen cada 20 s; si aún no llegaron, se usan las del
-  // gráfico solo cuando el intervalo seleccionado es 1h). Solo se
-  // recalculan cuando llega una vela nueva de 1h, no con cada tick.
-  const candles1h = (mtfCandles['1h'] && mtfCandles['1h'].length >= 32)
-    ? mtfCandles['1h']
-    : (candleInterval === '1h' ? candles : []);
-  const last1hKey = candles1h.length ? `${candles1h.length}:${candles1h[candles1h.length - 1].time}` : 'empty';
-  const backtest = useMemo(() => backtestSignal(candles1h), [last1hKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const histSignals = useMemo(() => signalHistory(candles1h, 10), [last1hKey]); // eslint-disable-line react-hooks/exhaustive-deps
-
   // --- v11: cálculos del MODO KALSHI 15 MIN ---
-  // (kalshiPrice se define aquí porque priceNow se declara más abajo;
-  // usar priceNow aquí daría error de zona temporal muerta.)
   const kalshiPrice = ticker?.price ?? markets.find((m) => m.symbol === symbol)?.price ?? null;
   const kalshiWin = window15m(nowMs);
   const candles15m = (mtfCandles['15m'] && mtfCandles['15m'].length >= 32)
@@ -533,12 +357,10 @@ export default function App() {
   const firstRealDecision = realDecisions.find((d) => d.decision) || null;
   const firstOutcome = firstRealDecision ? brtiPositionOutcome({ dir: firstRealDecision.dir, ...brtiArgs }) : null;
   const liveDecisionNow = firstRealDecision ? liveDecision({ winning: firstOutcome ? firstOutcome.winning : null, signalKey: kalshiVerdict.key, signalScore: kalshiScore, dir: firstRealDecision.dir, contractCents: firstRealDecision.currentPriceCents }) : null;
-  const kalshiWinChangePct = (kalshiRefPrice && kalshiPrice) ? ((kalshiPrice - kalshiRefPrice) / kalshiRefPrice) * 100 : null;
   const kalshiAtr = useMemo(() => atr(candles15m), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // v13.4: la medida 15m es la de KALSHI (windowOutcome.js): cierre
   // de la MISMA ventana vs su apertura (lo que liquida Kalshi), NO
-  // la vela siguiente. backtestSignal/signalHistory siguen para la
-  // señal general 1h, que sí se mide contra la vela siguiente.
+  // la vela siguiente.
   const kalshiBacktest = useMemo(() => backtestWindowSignal(candles15m), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const kalshiHist = useMemo(() => evaluateWindowSignal(candles15m, 5), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // v13: si en las últimas ventanas la señal 15m acierta menos del
@@ -547,6 +369,15 @@ export default function App() {
   // "SEÑAL DÉBIL" junto a SUBE/BAJA/ESPERAR, no solo baja la confianza.
   const kalshiRecent = recentWinRate(kalshiHist);
   const kalshiWeakSignal = Boolean(kalshiRecent && kalshiRecent.rate < 0.5);
+  // v15.3: ¿la señal 15m choca con los demás plazos? Si la mayoría de
+  // los timeframes con señal clara van en contra de la señal 15m, la
+  // recomendación del mercado (sin posición) dice ESPERAR, no inventa
+  // un lado. Sin timeframes claros no hay conflicto: no bloquea.
+  const marketWantKey = kalshiVerdict.key === 'up' ? 'buy' : kalshiVerdict.key === 'down' ? 'sell' : null;
+  const mtfClearRows = (mtfVerdict.rows || []).filter((r) => r.key === 'buy' || r.key === 'sell');
+  const marketConflict = Boolean(marketWantKey && mtfClearRows.length > 0
+    && mtfClearRows.filter((r) => r.key === marketWantKey).length / mtfClearRows.length < 0.5);
+  const marketRec = marketRecommendation({ signalKey: kalshiVerdict.key, weakSignal: kalshiWeakSignal, conflict: marketConflict });
   const kalshiProbAdj = adjustProbForRecent(kalshiProb, kalshiHist);
   const kalshiEntryNum = Number(kalshiEntryPrice);
   const kalshiAmountNum = Number(kalshiAmount);
@@ -574,9 +405,6 @@ export default function App() {
     saveLS('cev_kalshi_position_v1', { entryPrice: '', dir: 'up', amount: '100', entryScore: null });
     setKalshiMsg('Posición virtual borrada.');
   };
-  function priceNowForPlan() {
-    return ticker?.price ?? markets.find((m) => m.symbol === symbol)?.price ?? null;
-  }
   // v13.2: mercado actual de Kalshi (precio objetivo + SÍ/NO), cada
   // 15 s (el servidor cachea 15 s: el sondeo coincide con la caché).
   // Es el precio contra el que se liquida la ventana. Si Kalshi
@@ -618,51 +446,13 @@ export default function App() {
     return () => { alive = false; stop(); };
   }, [activeTab, symbol, user?.id]);
 
-  // v9: capitalización total y dominio de BTC REALES, de /api/global
-  // (CoinGecko). Se refrescan cada 5 min. Si CoinGecko falla o da 429,
-  // globalData queda en null y la UI muestra "No disponible", nunca un
-  // número inventado (el proxy precio × volumen se eliminó).
-  const [globalData, setGlobalData] = useState(null);
-  // v10: si no hay ninguna fuente, cuántos segundos faltan para el
-  // próximo reintento (lo devuelve /api/global como retryInSeconds).
-  const [globalRetrySec, setGlobalRetrySec] = useState(null);
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const g = await api('/api/global');
-        if (!alive) return;
-        if (g && g.available) { setGlobalData(g); setGlobalRetrySec(null); }
-        else { setGlobalData(null); setGlobalRetrySec(g && g.retryInSeconds != null ? g.retryInSeconds : 60); }
-      } catch { if (alive) { setGlobalData(null); setGlobalRetrySec(60); } }
-    };
-    load();
-    const stop = visibleInterval(load, 300000);
-    return () => { alive = false; stop(); };
-  }, []);
-  const capText = globalData && globalData.totalMarketCapUsd
-    ? `$${(globalData.totalMarketCapUsd / 1e12).toFixed(2)} billones`
-    : 'No disponible';
-  const domText = globalData && globalData.btcDominance != null
-    ? `${Number(globalData.btcDominance).toFixed(1)}%`
-    : 'No disponible';
-  const fearGreed = useMemo(() => fearGreedEstimate(markets, analysis.rsi), [markets, analysis.rsi]);
-  const heat = useMemo(() => heatToday(markets), [markets]);
-
   // --- Datos: polling AL SERVIDOR (localhost:3001), nunca a los exchanges ---
   useEffect(() => {
     let alive = true;
     const loadTicker = async () => {
       try {
-        const t0 = performance.now();
         const t = await api(`/api/ticker?symbol=${symbol}&currency=${currency}`);
         if (!alive) return;
-        setLatencyMs(Math.round(performance.now() - t0));
-        if (prevPrice.current != null && t.price !== prevPrice.current) {
-          const dir = t.price > prevPrice.current ? 'up' : 'down';
-          setFlash((f) => (f === dir ? f : dir));
-        }
-        prevPrice.current = t.price;
         // *** GRÁFICO EN VIVO: cada tick mueve la última vela ***
         const live = updateLastCandle(candlesRef.current, t.price, candleInterval);
         if (live && live !== candlesRef.current) {
@@ -678,12 +468,9 @@ export default function App() {
         if (!sameTicker(lastTicker.current, t)) {
           lastTicker.current = t;
           setTicker(t);
-          setSource((prev) => (prev === t.source ? prev : t.source));
-          setUpdatedAt((prev) => (prev === t.updatedAt ? prev : t.updatedAt));
         }
         setError((prev) => (prev === '' ? prev : ''));
-        setServerStatus((prev) => (prev === 'OK — responde' ? prev : 'OK — responde'));
-      } catch (e) { if (alive) { setError(String(e.message || e)); setServerStatus('FALLO — no responde'); } }
+      } catch (e) { if (alive) { setError(String(e.message || e)); } }
     };
     const loadMarkets = async () => {
       try {
@@ -694,18 +481,8 @@ export default function App() {
         if (sig !== lastMarketsSig.current) {
           lastMarketsSig.current = sig;
           setMarkets(list);
-          // Historial para los sparklines de cada pestaña (últimos 24 precios).
-          setSparkHist((prev) => {
-            const next = { ...prev };
-            for (const item of list) {
-              if (item.price == null) continue;
-              next[item.symbol] = [...(prev[item.symbol] || []), item.price].slice(-24);
-            }
-            return next;
-          });
         }
-        setMarketsError((prev) => (prev === '' ? prev : ''));
-      } catch (e) { if (alive) setMarketsError(String(e.message || e)); }
+      } catch { /* sin mercados: se mantiene la última lista */ }
     };
     const loadCandles = async () => {
       try {
@@ -721,7 +498,6 @@ export default function App() {
           setCandles(list);
         }
         setCandlesError((prev) => (prev === '' ? prev : ''));
-        setSource((s) => s || c.source);
       } catch (e) { if (alive) setCandlesError(String(e.message || e)); }
     };
     loadTicker(); loadMarkets(); loadCandles();
@@ -735,9 +511,7 @@ export default function App() {
     lastCandlesSig.current = '';
     lastChartSig.current = '';
     lastChartTime.current = null;
-    prevPrice.current = null;
     setCandles([]);
-    setBtcCandles([]);
   }, [symbol, currency, candleInterval]);
 
   // v8: velas de 1m, 5m, 15m y 1h para la confluencia del veredicto.
@@ -760,21 +534,6 @@ export default function App() {
     const stop = visibleInterval(load, 20000);
     return () => { alive = false; stop(); };
   }, [symbol, currency]);
-
-  // Velas de BTC para "comparar contra BTC" (solo cuando está activo).
-  useEffect(() => {
-    if (!compareBtc || symbol === 'BTC') { setBtcCandles([]); return undefined; }
-    let alive = true;
-    const load = async () => {
-      try {
-        const c = await api(`/api/candles?symbol=BTC&currency=${currency}&interval=${candleInterval}`);
-        if (alive) setBtcCandles(c.candles || []);
-      } catch { /* si falla, la comparación simplemente no se dibuja */ }
-    };
-    load();
-    const stop = visibleInterval(load, 10000);
-    return () => { alive = false; stop(); };
-  }, [compareBtc, symbol, currency, candleInterval]);
 
   // --- Alertas de precio personalizadas: se comprueban con cada tick ---
   useEffect(() => {
@@ -873,8 +632,6 @@ export default function App() {
     bbUpperSeries.current = chart.addLineSeries({ color: 'rgba(148,163,184,.7)', lineWidth: 1, title: 'Bollinger sup.', priceLineVisible: false, lastValueVisible: false });
     bbMiddleSeries.current = chart.addLineSeries({ color: 'rgba(148,163,184,.4)', lineWidth: 1, title: 'Bollinger media', priceLineVisible: false, lastValueVisible: false });
     bbLowerSeries.current = chart.addLineSeries({ color: 'rgba(148,163,184,.7)', lineWidth: 1, title: 'Bollinger inf.', priceLineVisible: false, lastValueVisible: false });
-    relSeries.current = chart.addLineSeries({ color: '#a78bfa', lineWidth: 2, title: 'vs BTC (índice 100)', priceScaleId: 'rel', priceLineVisible: false });
-    try { chart.priceScale('rel').applyOptions({ visible: false }); } catch {}
     const onResize = () => { try { chart.applyOptions({ width: el.clientWidth }); } catch {} };
     window.addEventListener('resize', onResize);
     let ro = null;
@@ -899,18 +656,9 @@ export default function App() {
       bbUpperSeries.current = null;
       bbMiddleSeries.current = null;
       bbLowerSeries.current = null;
-      relSeries.current = null;
       lastChartSig.current = '';
     };
   }, []);
-
-  // Pantalla completa del gráfico: redimensionar al entrar/salir.
-  useEffect(() => {
-    const chart = chartObj.current;
-    const el = chartRef.current;
-    if (!chart || !el) return;
-    chart.applyOptions({ width: el.clientWidth, height: chartFull ? Math.max(300, window.innerHeight - 160) : 340 });
-  }, [chartFull]);
 
   // --- Gráfico de velas: datos (solo cuando cambia la firma de las velas) ---
   useEffect(() => {
@@ -923,7 +671,7 @@ export default function App() {
     }
     const closes = candles.map((c) => c.close);
     const times = candles.map((c) => c.time);
-    const sig = `${candlesSignature(candles)}|${analysis.patterns.map((p) => `${p.time}:${p.name}`).join(',')}|ema:${showEma}|boll:${showBoll}|rsi:${showRsi}|vsbtc:${compareBtc}|btc:${btcCandles.length ? btcCandles[btcCandles.length - 1].time : 0}`;
+    const sig = `${candlesSignature(candles)}|${analysis.patterns.map((p) => `${p.time}:${p.name}`).join(',')}`;
     if (sig === lastChartSig.current) return;
     lastChartSig.current = sig;
     candleSeries.current.setData(candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
@@ -933,321 +681,26 @@ export default function App() {
       color: p.dir === 'up' ? '#22c55e' : p.dir === 'down' ? '#ef4444' : '#94a3b8',
       shape: p.dir === 'up' ? 'arrowUp' : p.dir === 'down' ? 'arrowDown' : 'circle', text: p.name,
     })));
-    // EMA 20/50 como líneas (toggle).
+    // EMA 20/50 como líneas (siempre visibles).
     const toPoints = (series) => times.map((t, i) => (series[i] == null ? null : { time: t, value: series[i] })).filter(Boolean);
     try {
       ema20Series.current?.setData(toPoints(emaSeries(closes, 20)));
-      ema20Series.current?.applyOptions({ visible: showEma });
       ema50Series.current?.setData(toPoints(emaSeries(closes, 50)));
-      ema50Series.current?.applyOptions({ visible: showEma });
     } catch {}
-    // Bollinger como 3 líneas (toggle).
+    // Bollinger como 3 líneas (siempre visibles).
     try {
       const bb = bollingerSeries(closes);
       const pick = (k) => times.map((t, i) => (bb[i] == null ? null : { time: t, value: bb[i][k] })).filter(Boolean);
       bbUpperSeries.current?.setData(pick('upper'));
       bbMiddleSeries.current?.setData(pick('middle'));
       bbLowerSeries.current?.setData(pick('lower'));
-      bbUpperSeries.current?.applyOptions({ visible: showBoll });
-      bbMiddleSeries.current?.applyOptions({ visible: showBoll });
-      bbLowerSeries.current?.applyOptions({ visible: showBoll });
     } catch {}
-    // Comparar contra BTC: índice relativo (100 = igual que al inicio).
-    try {
-      if (compareBtc && symbol !== 'BTC' && btcCandles.length > 1 && candles.length > 1) {
-        const btcByTime = new Map(btcCandles.map((c) => [c.time, c.close]));
-        const pairs = [];
-        for (let i = 0; i < candles.length; i++) {
-          const b = btcByTime.get(candles[i].time);
-          if (b != null) pairs.push([candles[i].time, candles[i].close, b]);
-        }
-        if (pairs.length > 1) {
-          const [t0, a0, b0] = pairs[0];
-          relSeries.current?.setData(pairs.map(([t, a, b]) => ({ time: t, value: ((a / a0) / (b / b0)) * 100 })));
-          relSeries.current?.applyOptions({ visible: true });
-          chartObj.current.priceScale('rel').applyOptions({ visible: true });
-        } else {
-          relSeries.current?.applyOptions({ visible: false });
-        }
-      } else {
-        relSeries.current?.applyOptions({ visible: false });
-        try { chartObj.current.priceScale('rel').applyOptions({ visible: false }); } catch {}
-      }
-    } catch {}
-    // RSI como panel inferior (toggle; el mini gráfico se crea al activarlo).
-    if (showRsi && rsiChartRef.current) {
-      try {
-        if (!rsiChartObj.current) {
-          const rc = createChart(rsiChartRef.current, {
-            width: rsiChartRef.current.clientWidth, height: 120,
-            layout: { background: { color: '#0b0f14' }, textColor: '#cbd5e1' },
-            grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
-            timeScale: { timeVisible: true, secondsVisible: false },
-            rightPriceScale: { visible: true },
-          });
-          rsiChartObj.current = rc;
-          rsiLineSeries.current = rc.addLineSeries({ color: '#f59e0b', lineWidth: 2, title: 'RSI 14', priceLineVisible: false });
-          rsiHiSeries.current = rc.addLineSeries({ color: '#64748b', lineWidth: 1, lineStyle: LineStyle.Dashed, title: '70', priceLineVisible: false, lastValueVisible: false });
-          rsiLoSeries.current = rc.addLineSeries({ color: '#64748b', lineWidth: 1, lineStyle: LineStyle.Dashed, title: '30', priceLineVisible: false, lastValueVisible: false });
-        }
-        rsiChartObj.current.applyOptions({ width: rsiChartRef.current.clientWidth });
-        const rs = rsiSeries(closes);
-        rsiLineSeries.current?.setData(toPoints(rs));
-        const span = times.length ? [{ time: times[0], value: 70 }, { time: times[times.length - 1], value: 70 }] : [];
-        const span30 = times.length ? [{ time: times[0], value: 30 }, { time: times[times.length - 1], value: 30 }] : [];
-        rsiHiSeries.current?.setData(span);
-        rsiLoSeries.current?.setData(span30);
-      } catch {}
-    }
     const lastTime = candles.length ? candles[candles.length - 1].time : null;
     if (lastTime !== lastChartTime.current) {
       lastChartTime.current = lastTime;
       chartObj.current.timeScale().scrollToRealTime();
     }
-  }, [candles, analysis, showEma, showBoll, showRsi, compareBtc, btcCandles, chartReady]);
-
-  const testServer = async () => {
-    setTestResult('Probando…');
-    setDebugInfo('');
-    try {
-      const t0 = Date.now();
-      const h = await api('/api/health');
-      const ms = Date.now() - t0;
-      setServerStatus('OK — responde');
-      setTestResult(`✅ Servidor OK en ${ms} ms`);
-    } catch (e) {
-      setServerStatus('FALLO — no responde');
-      setTestResult(`❌ Servidor NO responde: ${e.message || e}. ¿Corriste "npm run dev" en la carpeta raíz? ¿Dice la terminal "servidor en http://localhost:3001"?`);
-      return;
-    }
-    try {
-      const d = await api('/api/debug');
-      const lines = (d.sources || []).map((s) => s.ok ? `✅ ${s.name}: $${s.price} en ${s.ms} ms` : `❌ ${s.name}: ${s.error} (${s.ms} ms)`);
-      setDebugInfo(lines.join('\n'));
-    } catch (e) { setDebugInfo(`No se pudo correr /api/debug: ${e.message || e}`); }
-  };
-  const askNotif = async () => {
-    if (!('Notification' in window)) return;
-    const p = await Notification.requestPermission();
-    setNotif(p);
-  };
-
-  // --- Cartera virtual (dinero de mentira, solo localStorage) ---
-  const priceNow = ticker?.price ?? markets.find((m) => m.symbol === symbol)?.price ?? null;
-  const holdingsValue = Object.entries(portfolio.holdings || {}).reduce((sum, [sym, qty]) => {
-    const p = sym === symbol ? priceNow : markets.find((m) => m.symbol === sym)?.price;
-    return sum + (p ? qty * p : 0);
-  }, 0);
-  const totalValue = (portfolio.cash || 0) + holdingsValue;
-  const pnl = totalValue - START_CASH;
-  const pnlPct = (pnl / START_CASH) * 100;
-  useEffect(() => { if (totalValue >= START_CASH * 1.02) unlock('en_verde'); }, [totalValue]);
-  const topGainer = markets.length ? [...markets].sort((a, b) => (b.change24h ?? -999) - (a.change24h ?? -999))[0] : null;
-  const topLoser = markets.length ? [...markets].sort((a, b) => (a.change24h ?? 999) - (b.change24h ?? 999))[0] : null;
-
-  // --- Liga semanal: inicio de semana guardado, rivales demo deterministas ---
-  useEffect(() => {
-    const stored = loadLS('cev_league_week_v1', null);
-    const cur = stored || leagueWeek;
-    if (!cur || cur.weekKey !== weekKey) {
-      const next = { weekKey, startValue: totalValue > 0 ? totalValue : START_CASH };
-      saveLS('cev_league_week_v1', next);
-      setLeagueWeek(next);
-    } else if (totalValue > 0 && totalValue < cur.startValue * 0.6) {
-      // La cartera se reinició: la semana empieza desde el valor actual.
-      const next = { ...cur, startValue: totalValue };
-      saveLS('cev_league_week_v1', next);
-      setLeagueWeek(next);
-    } else if (!leagueWeek || leagueWeek.weekKey !== cur.weekKey || leagueWeek.startValue !== cur.startValue) {
-      setLeagueWeek(cur);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weekKey, totalValue]);
-  const weekStart = leagueWeek && leagueWeek.weekKey === weekKey ? leagueWeek.startValue : totalValue;
-  const myWeeklyReturn = weekStart > 0 ? ((totalValue - weekStart) / weekStart) * 100 : 0;
-  const myWeeklyPnl = totalValue - weekStart;
-  const rivals = useMemo(() => rivalsForWeek(weekKey), [weekKey]);
-  const standings = useMemo(() => {
-    const rows = [
-      ...rivals.map((r) => ({ name: r.name, ret: r.weeklyReturn, demo: true, me: false })),
-      { name: nickname ? `${nickname} (tú)` : 'Tú', ret: myWeeklyReturn, demo: false, me: true },
-    ];
-    return rows.sort((a, b) => b.ret - a.ret).map((r, i) => ({ ...r, rank: i + 1 }));
-  }, [rivals, myWeeklyReturn, nickname]);
-  const myRank = standings.find((s) => s.me)?.rank || null;
-  const isSunday = new Date().getDay() === 0;
-  const weekWinner = isSunday && standings.length ? standings[0] : null;
-
-  // --- Misiones: comprobación automática de las que se pueden detectar ---
-  useEffect(() => {
-    const today = localDay(0);
-    if ((portfolio.trades || []).some((tr) => new Date(tr.time).toLocaleDateString('en-CA') === today)) completeMission('primera_operacion');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [portfolio.trades]);
-  useEffect(() => {
-    const today = localDay(0);
-    if (priceAlerts.some((a) => new Date(a.createdAt).toLocaleDateString('en-CA') === today)) completeMission('poner_alerta');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [priceAlerts]);
-  useEffect(() => {
-    if ((visitedToday.symbols || []).length >= 3) completeMission('explorar_3');
-    if (totalValue > START_CASH) completeMission('en_verde');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visitedToday, totalValue]);
-  const level = levelForXp(xpTotal);
-  const xpInLevel = xpIntoLevel(xpTotal);
-  const missionsDoneToday = MISSIONS.filter((m) => missionDay.done[m.id]).length;
-
-  const doTrade = (side) => {
-    const amount = Number(paperAmount);
-    if (!priceNow || priceNow <= 0) { setPaperMsg('Todavía no llegó el precio en vivo. Espera un segundo.'); return; }
-    if (!amount || amount <= 0) { setPaperMsg('Pon una cantidad mayor que 0.'); return; }
-    const qty = amount / priceNow;
-    if (side === 'buy') {
-      if (amount > (portfolio.cash || 0)) { setPaperMsg(`No te alcanza: tienes ${fmt(portfolio.cash, currency)} virtuales.`); return; }
-      setPortfolio((prev) => ({
-        cash: prev.cash - amount,
-        holdings: { ...prev.holdings, [symbol]: (prev.holdings[symbol] || 0) + qty },
-        trades: [{ id: Date.now(), time: new Date().toISOString(), symbol, side: 'buy', qty, price: priceNow, total: amount, currency }, ...(prev.trades || [])].slice(0, 50),
-      }));
-      setPaperMsg(`Compraste ${fmtNum(qty, 6)} ${symbol} por ${fmt(amount, currency)} (virtual).`);
-      unlock('primera_operacion');
-      if (topGainer && topGainer.symbol === symbol) unlock('cazador_top');
-    } else {
-      const held = portfolio.holdings[symbol] || 0;
-      if (held <= 0) { setPaperMsg(`No tienes ${symbol} para vender.`); return; }
-      const sellQty = Math.min(held, qty);
-      const proceeds = sellQty * priceNow;
-      const nextHoldings = { ...portfolio.holdings };
-      if (held - sellQty < 1e-9) delete nextHoldings[symbol]; else nextHoldings[symbol] = held - sellQty;
-      setPortfolio((prev) => ({
-        cash: prev.cash + proceeds,
-        holdings: nextHoldings,
-        trades: [{ id: Date.now(), time: new Date().toISOString(), symbol, side: 'sell', qty: sellQty, price: priceNow, total: proceeds, currency }, ...(prev.trades || [])].slice(0, 50),
-      }));
-      setPaperMsg(`Vendiste ${fmtNum(sellQty, 6)} ${symbol} por ${fmt(proceeds, currency)} (virtual).`);
-      unlock('primera_operacion');
-    }
-  };
-  const resetPortfolio = () => {
-    setPortfolio({ cash: START_CASH, holdings: {}, trades: [] });
-    setPaperMsg('Cartera reiniciada a 10.000 virtuales.');
-  };
-  const addPriceAlert = () => {
-    const target = Number(alertTarget);
-    if (!target || target <= 0) { setPaperMsg('Pon un precio objetivo mayor que 0 para la alerta.'); return; }
-    // v9: no crear la misma alerta dos veces. Si ya existe una activa
-    // con el mismo activo, moneda, dirección y precio, no se duplica.
-    const dup = priceAlerts.some((a) => !a.triggered && a.symbol === symbol && a.currency === currency && a.direction === alertDir && Number(a.target) === target);
-    if (dup) { setPaperMsg(`Ya tienes esa alerta activa: ${symbol} ${alertDir === 'above' ? 'por encima de' : 'por debajo de'} ${fmt(target, currency)}. No se creó otra igual.`); return; }
-    const alert = { id: Date.now(), symbol, currency, target, direction: alertDir, createdAt: new Date().toISOString(), triggered: false };
-    setPriceAlerts((prev) => [alert, ...prev].slice(0, 20));
-    unlock('primera_alerta');
-    setPaperMsg(`Alerta creada: ${symbol} ${alertDir === 'above' ? 'por encima de' : 'por debajo de'} ${fmt(target, currency)}.`);
-  };
-
-  // --- Screener: se calcula SOLO al cargar la página (10 llamadas a /api/candles, 1h) ---
-  // v10: antes solo se calculaba al pulsar "Actualizar screener" y al
-  // entrar salía "Todavía no hay screener". Ahora se auto-ejecuta la
-  // primera vez que llegan las 10 pestañas de mercados; el botón queda
-  // solo para refrescar a mano.
-  const screenAutoRanRef = useRef(false);
-  const runScreener = async (marketsList) => {
-    const list = marketsList || markets;
-    setScreenLoading(true);
-    setScreenError('');
-    try {
-      const settled = await Promise.allSettled(ASSETS.map((a) => api(`/api/candles?symbol=${a.symbol}&currency=${currency}&interval=1h`)));
-      const analyses = {};
-      settled.forEach((r, i) => {
-        if (r.status === 'fulfilled' && r.value.candles && r.value.candles.length) analyses[ASSETS[i].symbol] = analyze(r.value.candles);
-      });
-      setScreenRows(screenOpportunities(list, analyses));
-      setScreenUpdatedAt(new Date().toLocaleTimeString('es-US'));
-    } catch (e) { setScreenError(String(e.message || e)); }
-    finally { setScreenLoading(false); }
-  };
-  useEffect(() => {
-    if (screenAutoRanRef.current || markets.length < 10 || screenLoading) return;
-    screenAutoRanRef.current = true;
-    runScreener(markets);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [markets]);
-
-  // --- Perfil local + liga privada + compartir ---
-  const saveNickname = () => {
-    const nick = nicknameInput.trim().slice(0, 20);
-    saveLS('cev_profile_v1', { nickname: nick });
-    setNickname(nick);
-    setProfileMsg(nick ? `Apodo guardado: ${nick}. Se usa en la liga y en la tarjeta para compartir.` : 'Apodo borrado.');
-  };
-  const createPrivateLeague = () => {
-    const name = leagueNameInput.trim().slice(0, 30) || 'Mi liga';
-    const code = genCode();
-    const lg = { code, name, members: [nickname || 'Tú'], createdAt: new Date().toISOString() };
-    saveLS('cev_private_league_v1', lg);
-    setPrivateLeague(lg);
-    setLeagueMsg(`Liga "${name}" creada. Código: ${code}. Compártelo con tus amigos. Es local/demo: el código solo existe en este navegador.`);
-  };
-  const joinPrivateLeague = () => {
-    const code = joinCodeInput.trim().toUpperCase();
-    if (!code) { setLeagueMsg('Escribe un código para unirte.'); return; }
-    if (privateLeague && privateLeague.code === code) { setLeagueMsg('Ya estás en esa liga.'); return; }
-    const lg = { code, name: `Liga ${code}`, members: [nickname || 'Tú'], createdAt: new Date().toISOString(), joined: true };
-    saveLS('cev_private_league_v1', lg);
-    setPrivateLeague(lg);
-    setLeagueMsg(`Te uniste a la liga con código ${code}. Es local/demo: solo existe en este navegador, no hay cuentas ni servidor de ligas.`);
-  };
-  const leavePrivateLeague = () => {
-    saveLS('cev_private_league_v1', null);
-    setPrivateLeague(null);
-    setLeagueMsg('Saliste de la liga privada local.');
-  };
-  const bestTrade = (portfolio.trades || []).reduce((best, tr) => (!best || tr.total > best.total ? tr : best), null);
-  const bestTradeText = bestTrade
-    ? `${bestTrade.side === 'buy' ? 'Compró' : 'Vendió'} ${fmtNum(bestTrade.qty, 4)} ${bestTrade.symbol} por ${fmt(bestTrade.total, bestTrade.currency || currency)}`
-    : null;
-  const shareData = {
-    nickname, pnl: myWeeklyPnl, pnlPct: myWeeklyReturn, rank: myRank,
-    leagueSize: standings.length, weekLabel: weekKey, bestTrade: bestTradeText, currencySym: CUR[currency],
-  };
-  const doShareText = async () => {
-    const text = shareText(shareData);
-    if (navigator.share) {
-      try { await navigator.share({ title: 'Cripto en Vivo', text }); setShareMsg('Compartido.'); return; }
-      catch { /* el usuario canceló: cae al portapapeles */ }
-    }
-    try {
-      await navigator.clipboard.writeText(text);
-      setShareMsg('Texto copiado al portapapeles. Pégalo en WhatsApp.');
-    } catch {
-      setShareMsg('No se pudo copiar automáticamente. Usa el botón de WhatsApp de abajo.');
-    }
-  };
-  const downloadCard = () => {
-    const canvas = shareCanvasRef.current;
-    if (!canvas) return;
-    drawShareCard(canvas, shareData);
-    const a = document.createElement('a');
-    a.download = `cripto-en-vivo-${weekKey}.png`;
-    a.href = canvas.toDataURL('image/png');
-    a.click();
-    setShareMsg('Tarjeta descargada como imagen PNG. Compártela en WhatsApp.');
-  };
-
-  const change24 = ticker?.change24h;
-  const sigColor = analysis.label === 'Posible subida' ? '#22c55e' : analysis.label === 'Posible bajada' ? '#ef4444' : '#94a3b8';
-  const sigPct = Math.round(((analysis.score + 100) / 200) * 100);
-  const upCount = markets.filter((m) => (m.change24h ?? 0) >= 0).length;
-  const downCount = markets.length - upCount;
-  const avgChange = markets.length ? markets.reduce((s, m) => s + (m.change24h ?? 0), 0) / markets.length : null;
-  const mood = !markets.length ? 'Esperando datos…'
-    : upCount >= 8 && (avgChange ?? 0) > 1 ? 'Euforia: casi todo sube'
-    : upCount >= 6 ? 'Optimista: la mayoría sube'
-    : downCount >= 8 && (avgChange ?? 0) < -1 ? 'Pánico: casi todo baja'
-    : downCount >= 6 ? 'Pesimista: la mayoría baja'
-    : 'Neutral: el mercado no se decide';
-  const fgColor = !fearGreed ? '#94a3b8' : fearGreed.value <= 24 ? '#ef4444' : fearGreed.value <= 44 ? '#f97316' : fearGreed.value <= 55 ? '#eab308' : fearGreed.value <= 75 ? '#84cc16' : '#22c55e';
+  }, [candles, analysis, chartReady]);
 
   // v12: vista admin (#admin): muestra el panel de administración en vez
   // de la app pública. Solo entra si el usuario es admin.
@@ -1310,32 +763,8 @@ export default function App() {
       </header>
 
 
-      {/* v12: modal de entrar / crear cuenta (sin registro obligatorio para ver precios y señales) */}
       {showAuth && (
-        <section className="card">
-          <h2>{showAuth === 'register' ? 'Crear cuenta' : 'Entrar'}</h2>
-          <p className="muted">La cuenta te deja conectar tu Kalshi en solo lectura para ver el valor BRTI en vivo y tus posiciones. Ver la pantalla no necesita cuenta.</p>
-          <form onSubmit={handleAuthSubmit}>
-            <div className="row">
-              {showAuth === 'register' && (
-                <label>Nombre: <input type="text" value={authName} autoComplete="name" onChange={(e) => setAuthName(e.target.value)} placeholder="Tu nombre" /></label>
-              )}
-              <label>Email: <input type="email" value={authEmail} autoComplete="email" onChange={(e) => setAuthEmail(e.target.value)} placeholder="tu@email.com" /></label>
-              <label>Contraseña: <input type="password" value={authPassword} autoComplete={showAuth === 'register' ? 'new-password' : 'current-password'} onChange={(e) => setAuthPassword(e.target.value)} placeholder="Mínimo 8 caracteres" /></label>
-              <button type="submit" disabled={authBusy}>{authBusy ? '…' : showAuth === 'register' ? 'Crear mi cuenta' : 'Entrar'}</button>
-              <button type="button" onClick={() => setShowAuth(null)}>Cancelar</button>
-            </div>
-          </form>
-          {authError && <p className="error">{authError}</p>}
-          <p className="muted">
-            {showAuth === 'login' ? (
-              <>¿No tienes cuenta? <button onClick={() => { setShowAuth('register'); setAuthError(''); }}>Crear cuenta</button></>
-            ) : (
-              <>¿Ya tienes cuenta? <button onClick={() => { setShowAuth('login'); setAuthError(''); }}>Entrar</button></>
-            )}
-          </p>
-          <p className="muted">¿Olvidaste tu contraseña? Pídele al admin que la resetee.</p>
-        </section>
+        <AuthModal showAuth={showAuth} authName={authName} onAuthName={setAuthName} authEmail={authEmail} onAuthEmail={setAuthEmail} authPassword={authPassword} onAuthPassword={setAuthPassword} authBusy={authBusy} authError={authError} onSubmit={handleAuthSubmit} onClose={() => setShowAuth(null)} onSwitchMode={(m) => { setShowAuth(m); setAuthError(''); }} />
       )}
 
       <p className="warn">⚠️ Prueba educativa, dinero virtual, solo lectura: la app nunca opera por ti. Kalshi liquida con el índice BRTI (promedio de 60 s), no con Coinbase.</p>
@@ -1343,211 +772,14 @@ export default function App() {
       {error && <div className="error">No se pudo cargar desde el servidor: {error}. Revisa que el servidor esté corriendo (npm run dev en la carpeta raíz).</div>}
 
         <section className={`card verdict-card kalshi-card verdict-${kalshiVerdict.key === 'up' ? 'buy' : kalshiVerdict.key === 'down' ? 'sell' : 'wait'}`} aria-label="Modo Kalshi 15 minutos">
-          <p className="verdict-kicker">MODO KALSHI 15 MIN · {symbol} · VENTANA DE 15 MINUTOS · EDUCATIVO, NO ES RECOMENDACIÓN DE APUESTA</p>
-          <h2>1 · Referencia en tiempo real — BTC · ventana 15 min</h2>
-          <div className="stats">
-            <div><span>Ventana actual</span><b>{fmtClock(kalshiWin.startMs)} – {fmtClock(kalshiWin.endMs)}</b></div>
-            <div><span>Cierra en</span><b className="countdown">{fmtCountdown(kalshiWin.remainingMs)}</b></div>
-            <div><span>Precio objetivo (Kalshi)</span><b>{kalshiTargetPrice ? fmt(kalshiTargetPrice, currency) : '—'}</b></div>
-            <div><span>Precio SÍ / NO (Kalshi)</span><b>{kalshiMarket && kalshiMarket.source === 'kalshi' && kalshiMarket.yesAskCents != null ? `SÍ ${kalshiMarket.yesAskCents}¢ · NO ${kalshiMarket.noAskCents ?? '—'}¢` : '—'}</b></div>
-          </div>
-          <div className="score-bar" aria-hidden="true"><div style={{ width: `${kalshiWin.elapsedPct}%`, background: '#f59e0b' }} /></div>
-          <p className="muted">Ventana {Math.round(kalshiWin.elapsedPct)}% transcurrida. Al cerrar, la predicción se resuelve: ¿el precio terminó por encima o por debajo del precio objetivo de Kalshi?</p>
-          <p className="muted">Precio objetivo de Kalshi: es el precio contra el que se liquida esta ventana (mercado {kalshiMarket && kalshiMarket.ticker ? kalshiMarket.ticker : 'KXBTC15M'}). El precio SÍ/NO es lo que cuesta el contrato en Kalshi en centavos, no la probabilidad de acierto de la señal de esta app.</p>
-          <p className="muted">Cómo liquida Kalshi: el objetivo es el promedio de 60 s antes de la apertura; el cierre se compara contra ese objetivo con el promedio de 60 s antes del cierre. El valor instantáneo que parpadea no liquida.</p>
-          {kalshiRefSource !== 'kalshi' && (
-            <p className="warn">⚠️ Precio de referencia de Coinbase, no de Kalshi: la API pública de Kalshi no devolvió el mercado actual, así que la referencia es la apertura de la vela 15m de Coinbase.</p>
-          )}
-          {kalshiCandleOpen && kalshiTargetPrice && (
-            <p className="muted">Apertura de la ventana según Coinbase: {fmt(kalshiCandleOpen, currency)} (solo orientativo; la liquidación usa el objetivo de Kalshi).</p>
-          )}
-
-          {/* v13.5: VALOR EN VIVO DE KALSHI (BRTI) — el número que
-              liquida la ventana, no Coinbase. El promedio de 60 s es
-              el que decide: si al cerrar está por encima del objetivo
-              gana SÍ, si no gana NO. GANANDO/PERDIENDO se calcula
-              contra ese promedio para tu primera posición real
-              abierta; sin posición real, solo se dice si el BRTI está
-              por encima o por debajo del objetivo. Sin Kalshi
-              conectado o sin dato del WS, se muestra Coinbase con
-              aviso, nunca en blanco y nunca un número inventado. */}
-          {brti == null ? (
-            <p className="muted">Cargando valor en vivo de Kalshi (BRTI)…</p>
-          ) : brti.source === 'kalshi' && brti.value != null ? (
-            <div className="signal" style={{ borderColor: brtiDiff != null && brtiDiff >= 0 ? '#22c55e' : brtiDiff != null ? '#ef4444' : '#94a3b8' }}>
-              <b style={{ fontSize: 26 }}>BRTI ahora: {fmt(brti.value, currency)}</b>
-              <span>Promedio de 60 s (el que liquida): <b>{brti.avg60s != null ? fmt(brti.avg60s, currency) : '— (aún no disponible: sin promedio no se puede saber si vas ganando; el valor instantáneo no liquida)'}</b>{brti.avg15mFinal != null && (<> · Promedio final de la ventana: <b>{fmt(brti.avg15mFinal, currency)}</b></>)}</span>
-              {kalshiTargetPrice && brtiDiff != null && (
-                <span>Diferencia contra el objetivo {fmt(kalshiTargetPrice, currency)}: <b className={brtiDiff >= 0 ? 'up' : 'down'}>{brtiDiff >= 0 ? '+' : '−'}{fmt(Math.abs(brtiDiff), currency)} ({brtiDiffPct >= 0 ? '+' : ''}{brtiDiffPct.toFixed(3)}%)</b> · referencia: promedio de 60 s</span>
-              )}
-              {kalshiTargetPrice && brtiDiff == null && (
-                <span className="muted">Promedio de 60 s no disponible: sin él no se puede saber si vas ganando ni la diferencia contra el objetivo. El valor instantáneo de arriba no liquida.</span>
-              )}
-              <span className="muted">Fuente: índice BRTI en vivo por WebSocket de Kalshi (canal cfbenchmarks_value), con tu clave ya conectada. Actualizado: {brti.updatedAt ? new Date(brti.updatedAt).toLocaleTimeString('es-US', { hour12: false }) : '—'}{brti.stale ? ' · ⚠️ Dato con más de 15 s: puede estar desactualizado.' : ''}</span>
-            </div>
-          ) : (
-            <div className="signal" style={{ borderColor: '#f59e0b' }}>
-              <b style={{ fontSize: 22 }}>⚠️ Sin valor en vivo de Kalshi</b>
-              <span>{user ? (brti.status === 'error' ? `El WebSocket de Kalshi no está dando el valor (${brti.error || 'sin dato'})` : 'Aún no llega el primer tick de Kalshi') : 'Entra con tu cuenta y conecta Kalshi para ver el valor en vivo que liquida'} — se muestra el precio de Coinbase mientras tanto.</span>
-              <span>Precio de Coinbase ahora: <b>{kalshiPrice ? fmt(kalshiPrice, currency) : '—'}</b> · puede diferir del de liquidación (BRTI).</span>
-              <span className="muted">Actualizado: {brti.updatedAt ? new Date(brti.updatedAt).toLocaleTimeString('es-US', { hour12: false }) : '—'}</span>
-            </div>
-          )}
-
-
-          {/* v15: §2 MI POSICIÓN EN VIVO — justo debajo de la
-              referencia. El P&L se recalcula con cada tick BRTI
-              (cada 2 s); las posiciones se refrescan cada 30 s
-              (KalshiConnect). P&L estimado = liquidación si la
-              ventana cerrara ahora según BRTI ($1 si vas ganando,
-              $0 si vas perdiendo, menos el precio medio, por
-              contrato). El P&L "si vendes ahora" es el del precio
-              del contrato, lo que Kalshi te pagaría hoy. */}
-          <h2>2 · Mi posición en vivo</h2>
-          {!user ? (
-            <p className="muted">Entra con tu cuenta y conecta Kalshi para ver tu posición en vivo aquí.</p>
-          ) : realDecisions.length === 0 ? (
-            <p className="muted">Sin posición abierta en Kalshi ahora mismo: no hay nada que vigilar. Cuando abras una, aparecerá aquí con su P&L en vivo.</p>
-          ) : (
-            <div>
-              {realDecisions.map((d, i) => {
-                const out = brtiPositionOutcome({ dir: d.dir, ...brtiArgs });
-                const pnlEst = estimateSettlementPnl({ dir: d.dir, ...brtiArgs, avgPriceCents: d.avgPriceCents, count: d.count });
-                const canLose = out && (!out.winning || out.nearLine);
-                return (
-                  <div key={`${d.ticker || ''}-${i}`} className="signal" style={{ borderColor: out ? (out.winning ? '#22c55e' : '#ef4444') : '#94a3b8' }}>
-                    <b>{d.ticker || '—'} — {d.side === 'yes' ? 'SÍ' : d.side === 'no' ? 'NO' : '—'} · Apuesta: {d.dir === 'up' ? '▲ SUBE' : d.dir === 'down' ? '▼ BAJA' : '—'}</b>
-                    <span>Precio medio: {d.avgPriceCents != null ? `${d.avgPriceCents}¢` : '—'} · Cantidad: {d.count} contrato(s) · Precio actual del contrato: {d.currentPriceCents != null ? `${d.currentPriceCents}¢` : '—'}</span>
-                    {pnlEst ? (
-                      <span>P&L estimado si la ventana cerrara ahora según BRTI: <b className={pnlEst.pnlUsd >= 0 ? 'up' : 'down'}>{pnlEst.pnlUsd >= 0 ? '+' : ''}{fmt(pnlEst.pnlUsd, 'USD')}</b> · el contrato valdría ${pnlEst.estValueCents / 100} si liquida así</span>
-                    ) : (
-                      <span className="muted">Sin P&L estimado: falta el promedio de 60 s, el objetivo o el precio medio. El valor instantáneo no liquida.</span>
-                    )}
-                    {d.decision && d.decision.pnl != null && (
-                      <span>Si vendes ahora en Kalshi (precio del contrato): <b className={d.decision.pnl >= 0 ? 'up' : 'down'}>{d.decision.pnl >= 0 ? '+' : ''}{fmt(d.decision.pnl, 'USD')}</b></span>
-                    )}
-                    {out ? (
-                      <span><b style={{ color: out.winning ? '#22c55e' : '#ef4444' }}>{out.winning ? '✓ VAS GANANDO según BRTI' : '✗ VAS PERDIENDO según BRTI'}</b>{canLose && (<span> · <b>⚠️ PUEDES PERDER</b>: {out.winning ? 'estás a menos de $30 del objetivo y la ventana puede darse la vuelta' : 'el BRTI está en tu contra'}</span>)}</span>
-                    ) : (
-                      <span className="muted">Sin promedio de 60 s: no se puede saber si vas ganando o perdiendo. El valor instantáneo no liquida y no se usa para decidir.</span>
-                    )}
-                    {!d.decision && (
-                      <span className="muted">Sin decisión por precio del contrato: falta el precio medio o el actual — comprueba la posición en Kalshi.</span>
-                    )}
-                  </div>
-                );
-              })}
-              <p className="muted">Posiciones actualizadas cada 30 s; el P&L se recalcula con cada tick BRTI (cada 2 s).</p>
-            </div>
-          )}
-
-          {/* v15: §3 DECISIÓN — SAL AHORA / AGUANTA / INVIERTE MÁS.
-              Sugerencia educativa, nunca una orden: la app no opera
-              por ti. Reglas en kalshi.js (liveDecision): contrato
-              ≤15¢ o BRTI + señal en contra -> SAL; ganando + señal
-              fuerte a favor + contrato ≤40¢ -> INVIERTE MÁS (con
-              aviso de más riesgo); ganando + señal a favor -> AGUANTA;
-              resto -> AGUANTA CON CUIDADO. */}
-          <h2>3 · Decisión</h2>
-          {!user ? (
-            <p className="muted">Entra y conecta Kalshi para que la app te diga si salir, aguantar o invertir más según tu posición.</p>
-          ) : !firstRealDecision ? (
-            <p className="muted">Sin posición abierta en Kalshi ahora mismo: no hay decisión que tomar. Cuando abras una, aparecerá aquí.</p>
-          ) : liveDecisionNow ? (
-            <div className="signal" style={{ borderColor: liveDecisionNow.color }}>
-              <b style={{ color: liveDecisionNow.color, fontSize: 26 }}>{liveDecisionNow.label}</b>
-              <span>{liveDecisionNow.reason}</span>
-              <span>Tu posición: <b>{firstRealDecision.ticker} — {firstRealDecision.side === 'yes' ? 'SÍ' : firstRealDecision.side === 'no' ? 'NO' : '—'} ({firstRealDecision.count} contrato(s), {firstRealDecision.currentPriceCents}¢ ahora)</b></span>
-              {liveDecisionNow.key === 'add' && (
-                <span className="warn">⚠️ Invertir más aumenta el riesgo: si la ventana se da la vuelta, pierdes más de lo que llevas. Solo con dinero que te sobre.</span>
-              )}
-              <span className="muted">Sugerencia educativa, nunca una orden: la app no opera por ti. Decide y opera tú en Kalshi.</span>
-            </div>
-          ) : null}
-
-          <h2>4 · Señales del mercado</h2>
-          <div className="verdict-main">
-            <div className="verdict-word">{kalshiVerdict.icon} {kalshiVerdict.label}{kalshiWeakSignal && (<span> · ⚠️ SEÑAL DÉBIL</span>)}</div>
-            <div className="verdict-meta">
-              <span>Puntuación 15m: <b>{kalshiScore}</b> / −100 a +100</span>
-              <span>Fuerza: <b>{strengthForScore(kalshiScore)}</b></span>
-              <span>Índice de coincidencia: <b>{kalshiProbAdj}/100*</b></span>
-            </div>
-          </div>
-          <p className="muted">* Índice propio (puntuación + timeframes que coinciden). NO es una probabilidad de ganar y NO es la probabilidad oficial de Kalshi. Una señal que acertó ~56% en 1h puede fallar en 15 minutos.</p>
-          {kalshiBacktest.total >= 5 && kalshiBacktest.ci95 && (
-            <p className="muted">Medido como liquida Kalshi (señal calculada ANTES de abrir cada ventana): acertó {kalshiBacktest.wins} de {kalshiBacktest.total} ({kalshiBacktest.pct}%; margen al 95%: {kalshiBacktest.ci95.low}–{kalshiBacktest.ci95.high}%).{isCoinFlip(kalshiBacktest.ci95) ? ' Con estas muestras no se distingue de lanzar una moneda.' : ''}</p>
-          )}
-          {kalshiWeakSignal && (
-            <p className="warn">⚠️ SEÑAL DÉBIL — Últimas {kalshiRecent.total} ventanas con señal clara de 15 min: la señal solo acertó {kalshiRecent.wins} ({Math.round(kalshiRecent.rate * 100)}%). Está fallando últimamente: el índice se bajó a {kalshiProbAdj} y no conviene apostar fuerte por ella. Medido como liquida Kalshi: cierre de cada ventana contra su apertura, no contra la vela siguiente.</p>
-          )}
-          {kalshiReasons.length > 0 && (
-            <ul className="reasons">
-              {kalshiReasons.map((r, i) => (
-                <li key={i} className={`reason-${r.dir}`}><b>{r.icon}</b> {r.text}</li>
-              ))}
-            </ul>
-          )}
-
-          <h3>¿Cobro o me quedo?</h3>
-          <div className="row">
-            <label>Precio de entrada ({CUR[currency]}): <input type="number" min="0" step="1" value={kalshiEntryPrice} placeholder={kalshiPrice ? String(Math.round(kalshiPrice)) : ''} onChange={(e) => setKalshiEntryPrice(e.target.value)} /></label>
-            <label>Dirección: <select value={kalshiDir} onChange={(e) => setKalshiDir(e.target.value)}>
-              <option value="up">Aposté a que SUBE</option>
-              <option value="down">Aposté a que BAJA</option>
-            </select></label>
-            <label>Cantidad virtual ({CUR[currency]}): <input type="number" min="1" step="10" value={kalshiAmount} onChange={(e) => setKalshiAmount(e.target.value)} /></label>
-            <button onClick={setKalshiPosition}>Guardar mi posición virtual</button>
-            <button onClick={clearKalshiPosition}>Borrar posición</button>
-          </div>
-          {kalshiMsg && <p className="muted">{kalshiMsg}</p>}
-          <div className="signal" style={{ borderColor: kalshiDecision.color }}>
-            <b style={{ color: kalshiDecision.color, fontSize: 26 }}>{kalshiDecision.label}</b>
-            <span><b>{kalshiDecision.title}</b></span>
-            <span>{kalshiDecision.text}</span>
-            {kalshiDecision.pnl != null && (
-              <span>Tu posición virtual: <b className={kalshiDecision.pnl >= 0 ? 'up' : 'down'}>{kalshiDecision.pnl >= 0 ? '+' : ''}{fmt(kalshiDecision.pnl, currency)} ({kalshiDecision.pnlPct >= 0 ? '+' : ''}{kalshiDecision.pnlPct.toFixed(2)}%)</b> · precio ahora {kalshiPrice ? fmt(kalshiPrice, currency) : '—'} · entrada {fmt(kalshiEntryNum, currency)}</span>
-            )}
-            {kalshiExitPrice && (
-              <span>Precio sugerido para cobrar/salir: <b>{fmt(kalshiExitPrice, currency)}</b> {kalshiDecision.key === 'hold' || kalshiDecision.key === 'hold-careful' ? `(objetivo a 1 ATR 15m, ${kalshiAtr ? fmt(kalshiAtr, currency) : '—'})` : '(precio actual)'}</span>
-            )}
-          </div>
-          <p className="muted">Regla simple: si vas ganando y la señal se dio la vuelta, cobra. Si vas perdiendo y la señal va en tu contra, sal. Si la señal sigue a tu favor, aguanta hasta el cierre de la ventana. Todo virtual: nada de esto mueve dinero real ni tu cuenta de Kalshi.</p>
-
-          {/* v15: §5 GRÁFICA — velas BTC 15m, al final. Sin botones
-              de intervalo (siempre 15m), sin toggles de
-              indicadores, sin pantalla completa ni panel RSI. Solo
-              las velas y "Cargando velas…" si aún no llegaron. */}
-          <section className="card">
-            <div className="row"><h2>5 · Gráfica · BTC 15m</h2></div>
-            <div ref={chartRef} className="chart" />
-            {candles.length === 0 && (
-              <p className="muted">{candlesError ? `Sin velas: ${candlesError}` : 'Cargando velas…'}</p>
-            )}
-          </section>
-
-
-          {/* v14: MI CUENTA KALSHI discreta — solo un <details>.
-              KalshiConnect en modo mínimo: sigue cargando las
-              posiciones y subiendo la decisión real a la §2 y §3,
-              pero NO muestra la tabla ni el historial. Sin
-              sesión, solo los botones de entrar/crear cuenta. */}
-          <details className="account-details">
-            <summary>⚙️ Mi cuenta Kalshi — conectar / desconectar</summary>
-            {user ? (
-              <KalshiConnect token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} currentPrice={kalshiPrice} referencePrice={kalshiRefPrice} referenceSource={kalshiRefSource} currency={currency} user={user} onLogout={handleLogout} active onRealDecision={handleRealDecisions} minimal />
-            ) : (
-              <div>
-                <p className="muted">Entra o crea tu cuenta para conectar tu Kalshi y ver tus posiciones reales. La app nunca opera por ti: solo lee tus posiciones.</p>
-                <div className="row">
-                  <button onClick={() => { setShowAuth('login'); setAuthError(''); }}>Entrar</button>
-                  <button onClick={() => { setShowAuth('register'); setAuthError(''); }}>Crear cuenta</button>
-                </div>
-              </div>
-            )}
-          </details>
-
+          <MyPosition user={user} realDecisions={realDecisions} brtiArgs={brtiArgs} fmt={fmt} />
+          <Decision user={user} firstRealDecision={firstRealDecision} liveDecisionNow={liveDecisionNow} marketRec={marketRec} kalshiScore={kalshiScore} kalshiReasons={kalshiReasons} />
+          <LiveReference symbol={symbol} currency={currency} kalshiWin={kalshiWin} kalshiTargetPrice={kalshiTargetPrice} kalshiMarket={kalshiMarket} kalshiPrice={kalshiPrice} kalshiRefSource={kalshiRefSource} brti={brti} brtiDiff={brtiDiff} brtiDiffPct={brtiDiffPct} fmt={fmt} user={user} />
+          <Signals kalshiVerdict={kalshiVerdict} kalshiWeakSignal={kalshiWeakSignal} kalshiScore={kalshiScore} kalshiProbAdj={kalshiProbAdj} kalshiBacktest={kalshiBacktest} kalshiRecent={kalshiRecent} kalshiReasons={kalshiReasons} kalshiEntryPrice={kalshiEntryPrice} onKalshiEntryPrice={setKalshiEntryPrice} kalshiDir={kalshiDir} onKalshiDir={setKalshiDir} kalshiAmount={kalshiAmount} onKalshiAmount={setKalshiAmount} onSaveKalshiPosition={setKalshiPosition} onClearKalshiPosition={clearKalshiPosition} kalshiMsg={kalshiMsg} kalshiDecision={kalshiDecision} kalshiPrice={kalshiPrice} kalshiEntryNum={kalshiEntryNum} kalshiExitPrice={kalshiExitPrice} kalshiAtr={kalshiAtr} currency={currency} currencySym={CUR[currency]} fmt={fmt} />
+          <ChartSection chartRef={chartRef} candles={candles} candlesError={candlesError} />
+          <AccountBox user={user} token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} kalshiPrice={kalshiPrice} kalshiRefPrice={kalshiRefPrice} kalshiRefSource={kalshiRefSource} currency={currency} onLogout={handleLogout} onRealDecision={handleRealDecisions} onShowAuth={(m) => { setShowAuth(m); setAuthError(''); }} />
         </section>
+
 
       <footer>Fuente de datos: APIs públicas de Coinbase, Kraken, Binance US y CoinGecko, consultadas por el servidor. Precios en vivo, no inventados. {APP_URL}</footer>
     </div>

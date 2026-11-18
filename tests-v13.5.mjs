@@ -34,6 +34,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
+import { frontendSrc } from './frontendSrc.mjs';
 
 const require = createRequire(import.meta.url);
 const brti = require('./server/brti.js');
@@ -125,7 +126,7 @@ check('routes.js cierra el WS al desconectar Kalshi', routes.includes('stopBrti(
 check('routes.js: /kalshi/brti exige conexión (connected:false sin ella)', routes.includes("connected: false, source: 'coinbase'"));
 check('brti.js no tiene llamadas de escritura a Kalshi (ni /orders, ni POST, ni kalshiGet)', !src('server/brti.js').includes('/orders') && !src('server/brti.js').includes("method: 'POST'") && !src('server/brti.js').includes('kalshiGet('));
 check('brti.js se suscribe a cfbenchmarks_value con BRTI', src('server/brti.js').includes('cfbenchmarks_value') && src('server/brti.js').includes("index_ids: [BRTI_INDEX_ID]"));
-const app = src('client/src/App.jsx');
+const app = frontendSrc();
 check('App.jsx sondea /api/kalshi/brti cada 2 s (v15)', app.includes("apiAuth('/api/kalshi/brti')") && app.includes('2000'));
 check('App.jsx muestra "BRTI ahora" (v15)', app.includes('BRTI ahora'));
 check('App.jsx muestra aviso de fallback a Coinbase si no hay BRTI (v15: Sin valor en vivo de Kalshi)', app.includes('Sin valor en vivo de Kalshi') && app.includes('Precio de Coinbase ahora:'));

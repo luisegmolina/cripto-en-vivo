@@ -239,6 +239,32 @@ export function liveDecision({ winning, signalKey, signalScore, dir, contractCen
   return { key: 'hold-careful', label: 'AGUANTA CON CUIDADO', color: '#f59e0b', reason: 'Señales mezcladas: el BRTI y la señal de 15 minutos no van en la misma dirección. No hay decisión clara: espera a que se defina y si la señal va en tu contra, sal.' };
 }
 
+// v15.3: RECOMENDACIÓN DEL MERCADO cuando NO hay posición abierta.
+// Traduce la señal 15m a lenguaje directo: "Apuesta a la SUBIDA" /
+// "Apuesta a la BAJADA" / "ESPERAR". Sigue siendo SOLO una sugerencia
+// educativa (el backtest 15m no se distingue de una moneda): nunca
+// una orden ni una garantía. Si la señal es débil (acierta menos del
+// 50% en las últimas ventanas) o conflictiva (los demás plazos van en
+// contra de la señal 15m), dice ESPERAR y no inventa un lado.
+// La decisión de una posición ABIERTA no pasa por aquí: eso lo decide
+// liveDecision (SAL / AGUANTA / INVIERTE MÁS). Función pura, probada
+// en Node (tests-v15.3.mjs).
+export function marketRecommendation({ signalKey, weakSignal = false, conflict = false }) {
+  if (weakSignal) {
+    return { key: 'wait', label: 'ESPERAR', side: null, reason: 'La señal 15m está débil: en las últimas ventanas con señal clara acertó menos de la mitad. No hay lado claro en el que apostar.' };
+  }
+  if (conflict) {
+    return { key: 'wait', label: 'ESPERAR', side: null, reason: 'La señal 15m y los demás plazos no se ponen de acuerdo: unos dicen SUBE y otros BAJA. Sin lado claro, esperar.' };
+  }
+  if (signalKey === 'up') {
+    return { key: 'up', label: 'Apuesta a la SUBIDA', side: 'up', reason: 'La señal 15m dice SUBE con claridad: el mercado apunta a que BTC termina la ventana por encima del objetivo.' };
+  }
+  if (signalKey === 'down') {
+    return { key: 'down', label: 'Apuesta a la BAJADA', side: 'down', reason: 'La señal 15m dice BAJA con claridad: el mercado apunta a que BTC termina la ventana por debajo del objetivo.' };
+  }
+  return { key: 'wait', label: 'ESPERAR', side: null, reason: 'La señal 15m no es clara en esta ventana: ni SUBE ni BAJA con fuerza. Esperar a que se defina o a la próxima ventana.' };
+}
+
 // Decisión COBRO / AGUANTO / SALGO para una posición REAL de Kalshi
 // (v13.4). La regla por SEÑAL sola no basta: en Kalshi lo que manda
 // es el PRECIO DEL CONTRATO en centavos (el contrato paga $1 si

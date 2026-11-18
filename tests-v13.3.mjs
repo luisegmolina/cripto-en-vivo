@@ -8,12 +8,13 @@
 // una sola vez, no duplicados.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { frontendSrc } from './frontendSrc.mjs';
 
 let pass = 0;
 function ok(name, cond) { assert.ok(cond, name); pass++; console.log(`  ✓ ${name}`); }
 function count(src, sub) { return src.split(sub).length - 1; }
 
-const appSrc = readFileSync('./client/src/App.jsx', 'utf8');
+const appSrc = frontendSrc();
 const kcSrc = readFileSync('./client/src/KalshiConnect.jsx', 'utf8');
 const versionTxt = readFileSync('./VERSION.txt', 'utf8');
 
@@ -38,7 +39,7 @@ console.log('— 5 secciones en orden —');
 const iPred = appSrc.indexOf('MODO KALSHI 15 MIN');
 const iCobro = appSrc.indexOf('¿Cobro o me quedo?');
 const iPos = appSrc.indexOf('<KalshiConnect');
-ok('v14: §1 predicción, §2 cobro, §3+§4 KalshiConnect (sin §5: historial eliminado por diseño)', iPred > 0 && iPred < iCobro && iCobro < iPos && !appSrc.includes('Últimas ventanas con señal clara'));
+ok('v15.3: §3 referencia, §4 cobro, KalshiConnect tras ellos (sin §5: historial eliminado por diseño)', iPred > 0 && iPred < iCobro && iCobro < iPos && !appSrc.includes('Últimas ventanas con señal clara'));
 const kPos = kcSrc.indexOf('Mis posiciones de Kalshi');
 const kCerradas = kcSrc.indexOf('Posiciones cerradas / liquidadas');
 const kCuenta = kcSrc.indexOf('Mi cuenta</h3>');

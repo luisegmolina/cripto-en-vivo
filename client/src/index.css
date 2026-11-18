@@ -1,6 +1,6 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: #0b0f14; color: #e2e8f0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-.app { max-width: 960px; margin: 0 auto; padding: 16px; }
+.app { max-width: 720px; margin: 0 auto; padding: 16px; }
 header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 h1 { margin: 0; font-size: 28px; } h2 { margin: 0 0 8px; font-size: 18px; }
 p { margin: 6px 0; } .muted { color: #94a3b8; font-size: 14px; }
@@ -28,7 +28,7 @@ button.on { background: #f59e0b; color: #111827; border-color: #f59e0b; font-wei
 .signal b { font-size: 22px; }
 ul { padding-left: 18px; } .alerts li { margin: 4px 0; }
 footer { color: #64748b; font-size: 13px; text-align: center; margin: 20px 0; }
-@media (max-width: 600px) { .app { padding: 10px; } .card { padding: 12px; } }
+@media (max-width: 600px) { .app { padding: 10px; } .card { padding: 12px; } .row label { flex: 1 1 100%; } .row label input, .row label select { width: 100%; } }
 
 /* --- Ticker tape superior --- */
 .tape { overflow: hidden; background: #0f172a; border: 1px solid #1f2937; border-radius: 12px; margin-bottom: 12px; }

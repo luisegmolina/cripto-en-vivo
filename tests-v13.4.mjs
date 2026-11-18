@@ -32,6 +32,7 @@ import { signalHistory } from './client/src/verdict.js';
 import { backtestSignal } from './client/src/backtest.js';
 import { evaluateWindowSignal, backtestWindowSignal } from './client/src/windowOutcome.js';
 import { cashOutDecision, cashOutDecisionReal } from './client/src/kalshi.js';
+import { frontendSrc } from './frontendSrc.mjs';
 
 let pass = 0, fail = 0, skipped = 0;
 function ok(name, cond, extra = '') {
@@ -41,7 +42,7 @@ function ok(name, cond, extra = '') {
 function skip(name) { skipped++; console.log(`  ○ SALTADO: ${name}`); }
 function count(src, sub) { return src.split(sub).length - 1; }
 
-const appSrc = readFileSync('./client/src/App.jsx', 'utf8');
+const appSrc = frontendSrc();
 const kcSrc = readFileSync('./client/src/KalshiConnect.jsx', 'utf8');
 const kalshiSrc = readFileSync('./client/src/kalshi.js', 'utf8');
 const serverAppSrc = readFileSync('./server/app.js', 'utf8');
@@ -102,17 +103,17 @@ console.log('— cashOutDecisionReal: precio del contrato en centavos —');
 console.log('— estáticos: UI y textos v13.4 —');
 ok('App.jsx usa la medición Kalshi para el backtest 15m', appSrc.includes('backtestWindowSignal(candles15m)'));
 ok('App.jsx usa la medición Kalshi para últimas ventanas', appSrc.includes('evaluateWindowSignal(candles15m, 5)'));
-ok('la señal general 1h sigue con la medida de vela siguiente', appSrc.includes('backtestSignal(candles1h)') && appSrc.includes('signalHistory(candles1h, 10)'));
+ok('v15.3: backtest/historial 1h ELIMINADOS de App.jsx (no se mostraban desde v14; la medida que manda es la 15m de Kalshi)', !appSrc.includes('backtestSignal(candles1h)') && !appSrc.includes('signalHistory(candles1h, 10)') && !appSrc.includes('candles1h'));
 ok('v14: historial de últimas ventanas eliminado de la vista (por diseño)', !appSrc.includes('Últimas ventanas con señal clara'));
 ok('ya no dice "Últimas ventanas de 15 min" a secas', !appSrc.includes('Últimas ventanas de 15 min —'));
 ok('v14: nota del historial eliminada con la tabla (por diseño)', !appSrc.includes('No son las últimas 5 ventanas seguidas'));
 ok('v14: tabla Apertura/Cierre eliminada con el historial (por diseño)', !appSrc.includes('<th>Apertura</th><th>Cierre</th>'));
 ok('SEÑAL DÉBIL junto al veredicto', appSrc.includes('SEÑAL DÉBIL'));
 ok('aviso de señal débil cita la medida Kalshi', appSrc.includes('Medido como liquida Kalshi'));
-ok('v15: decisión real en §3, antes de las señales y del formulario virtual',
-  appSrc.indexOf('3 · Decisión') > appSrc.indexOf('2 · Mi posición en vivo') &&
-  appSrc.indexOf('3 · Decisión') < appSrc.indexOf('<h3>¿Cobro o me quedo?</h3>'));
-ok('App.jsx pasa active (siempre, pantalla única) y onRealDecision a KalshiConnect', appSrc.includes('active onRealDecision={handleRealDecisions}'));
+ok('v15.3: decisión real en §2, tras la posición (§1) y antes de las señales y del formulario virtual',
+  appSrc.indexOf('2 · Decisión') > appSrc.indexOf('1 · Mi posición en vivo') &&
+  appSrc.indexOf('2 · Decisión') < appSrc.indexOf('<h3>¿Cobro o me quedo?</h3>'));
+ok('App.jsx pasa active (siempre, pantalla única) y onRealDecision a KalshiConnect (v15.3: vía AccountBox)', appSrc.includes('onRealDecision={handleRealDecisions}') && appSrc.includes('active onRealDecision={onRealDecision}'));
 ok('KalshiConnect usa cashOutDecisionReal para la tabla real', kcSrc.includes('cashOutDecisionReal') && kcSrc.includes('realDecisionFor(pos)'));
 ok('KalshiConnect ya no decide la real con cashOutDecision', !kcSrc.includes('cashOutDecision({ dir'));
 ok('regla por precio documentada en la UI (≥85¢ / ≤15¢)', kcSrc.includes('≥85¢') && kcSrc.includes('≤15¢'));

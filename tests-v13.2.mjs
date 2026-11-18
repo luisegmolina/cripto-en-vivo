@@ -30,6 +30,7 @@
 
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { frontendSrc } from './frontendSrc.mjs';
 
 const require = createRequire(import.meta.url);
 const { deriveDirection, parseTickerWindow, resolvePositionSide, signedPosition, parseTargetPrice, buildCurrentTicker, getCurrentKalshiMarket } = require('./server/kalshiServer.js');
@@ -130,7 +131,7 @@ check('position 0 + sin fills = lado desconocido (null, no inventado)', (() => {
   const stubFail = async () => { throw new Error('Kalshi no responde'); };
   const mFail = await getCurrentKalshiMarket({ nowMs: Date.UTC(2026, 10, 13, 2, 40), fetchFn: stubFail, skipCache: true });
   check('getCurrentKalshiMarket: si Kalshi falla devuelve null (el cliente cae a Coinbase)', mFail === null);
-  const app = readFileSync('./client/src/App.jsx', 'utf8');
+  const app = frontendSrc();
   check('cliente: pestaña Kalshi muestra "Precio objetivo (Kalshi)"', app.includes('Precio objetivo (Kalshi)'));
   check('cliente: muestra "Precio SÍ / NO (Kalshi)"', app.includes('Precio SÍ / NO (Kalshi)'));
   check('cliente: aviso BRTI en la línea única de v14 (liquidación, no Coinbase)', app.includes('Kalshi liquida con el índice BRTI') && app.includes('no con Coinbase'));
