@@ -225,7 +225,7 @@ export function liveDecision({ winning, signalKey, signalScore, dir, contractCen
     return { key: 'exit', label: 'SAL AHORA', color: '#ef4444', reason: 'El BRTI va en tu contra y la señal de 15 minutos también. La ventana juega en contra: salir ahora limita la pérdida.' };
   }
   if (winning === true && favors === 'against') {
-    return { key: 'exit', label: 'SAL AHORA', color: '#22c55e', reason: 'Vas ganando, pero la señal de 15 minutos se dio la vuelta. Salir ahora asegura la ganancia antes de que el giro se la coma.' };
+    return { key: 'exit', label: 'SAL AHORA', color: '#ef4444', reason: 'Vas ganando, pero la señal de 15 minutos se dio la vuelta. Salir ahora asegura la ganancia antes de que el giro se la coma.' };
   }
   if (winning === true && strongFavor && cur != null && Number.isFinite(cur) && cur <= 40) {
     return { key: 'add', label: 'INVIERTE MÁS', color: '#22c55e', reason: `Vas ganando, la señal está fuerte a tu favor (puntuación ${signalScore}) y el contrato está barato (${cur}¢). Solo si te sobra: invertir más aumenta el riesgo — si la ventana se da la vuelta, pierdes más.` };

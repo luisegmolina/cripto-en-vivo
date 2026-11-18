@@ -71,6 +71,26 @@ function avgFieldToNumber(v) {
 // Parsea UN mensaje del canal cfbenchmarks_value.
 // Devuelve {value, avg60s, avg15mFinal, receivedAt} o null si no es
 // un tick BRTI válido. Función pura, probada en Node.
+// v15.1: fusiona un tick nuevo con el último estado conocido RETENIENDO
+// los campos que el tick no trae. Un tick del canal cfbenchmarks_value
+// puede venir sin avg_60s_data: si se sobrescribiera con null, el
+// promedio de 60 s (el que liquida) se borraría y el aviso VAS
+// GANANDO / VAS PERDIENDO desaparecería justo antes del cierre, aunque
+// el WebSocket siguiera conectado. Por eso solo se sobrescribe un campo
+// cuando el tick trae un valor no nulo; updatedAt solo avanza con un
+// tick válido. Función pura, probada en Node.
+function mergeBrtiTick(prev, tick) {
+  if (!tick) return prev;
+  return {
+    value: tick.value != null ? tick.value : (prev ? prev.value : null),
+    avg60s: tick.avg60s != null ? tick.avg60s : (prev ? prev.avg60s : null),
+    avg15mFinal: tick.avg15mFinal != null ? tick.avg15mFinal : (prev ? prev.avg15mFinal : null),
+    updatedAt: tick.receivedAt ? new Date(tick.receivedAt).toISOString() : (prev ? prev.updatedAt : null),
+    status: 'live',
+    error: null,
+  };
+}
+
 function parseCfBenchmarksMessage(raw) {
   let parsed;
   try {
@@ -158,12 +178,9 @@ function connectWs(userId, entry) {
   ws.on('message', (data) => {
     const tick = parseCfBenchmarksMessage(data.toString());
     if (!tick) return; // respuestas subscribed/indexlist/errores: se ignoran, no son ticks
-    entry.state.value = tick.value;
-    entry.state.avg60s = tick.avg60s;
-    entry.state.avg15mFinal = tick.avg15mFinal;
-    entry.state.updatedAt = new Date(tick.receivedAt).toISOString();
-    entry.state.status = 'live';
-    entry.state.error = null;
+    // v15.1: retener el último promedio conocido: un tick sin avg60s
+    // no borra el anterior (mergeBrtiTick solo sobrescribe no-nulos).
+    entry.state = { ...entry.state, ...mergeBrtiTick(entry.state, tick), lastPollAt: entry.state.lastPollAt };
   });
   ws.on('error', (e) => {
     entry.state.status = 'error';
@@ -212,4 +229,4 @@ function stopBrti(userId) {
   try { entry.ws && entry.ws.close(); } catch { /* ya cerrado */ }
 }
 
-module.exports = { WS_URL, BRTI_INDEX_ID, parseCfBenchmarksMessage, wsAuthHeaders, ensureBrti, getBrtiState, stopBrti };
+module.exports = { WS_URL, BRTI_INDEX_ID, parseCfBenchmarksMessage, mergeBrtiTick, wsAuthHeaders, ensureBrti, getBrtiState, stopBrti };

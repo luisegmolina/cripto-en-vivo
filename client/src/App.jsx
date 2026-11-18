@@ -601,12 +601,12 @@ export default function App() {
       try {
         const b = await apiAuth('/api/kalshi/brti');
         if (alive) setBrti(b || null);
-      } catch { if (alive) setBrti({ source: 'coinbase', value: null, status: 'error', error: 'No se pudo leer el BRTI del servidor.' }); }
+      } catch { if (alive) setBrti((prev) => (prev && prev.source === 'kalshi' && prev.value != null) ? { ...prev, status: 'error', stale: true, error: 'No se pudo leer el BRTI del servidor: se mantiene el último valor conocido.' } : { source: 'coinbase', value: null, status: 'error', error: 'No se pudo leer el BRTI del servidor.' }); }
     };
     load();
     const t = setInterval(load, 2000);
     return () => { alive = false; clearInterval(t); };
-  }, [activeTab, symbol, user]);
+  }, [activeTab, symbol, user?.id]);
 
   // v9: capitalización total y dominio de BTC REALES, de /api/global
   // (CoinGecko). Se refrescan cada 5 min. Si CoinGecko falla o da 429,
@@ -1505,9 +1505,6 @@ export default function App() {
 
           {/* v15: §5 GRÁFICA — velas BTC 15m, al final. Sin botones
               de intervalo (siempre 15m), sin toggles de
-              indicadores, sin pantalla completa ni panel RSI. Solo
-              las velas y "Cargando velas…" si aún no llegaron. */}
-              Sin botones de intervalo (siempre 15m), sin toggles de
               indicadores, sin pantalla completa ni panel RSI. Solo
               las velas y "Cargando velas…" si aún no llegaron. */}
           <section className="card">

@@ -277,6 +277,19 @@ ofrece un apodo local (sin contraseña, sin servidor).
   local" (sin contraseña, sin servidor), que se usa en la liga semanal
   y en la tarjeta para compartir. Nada se envía a ningún servidor.
 
+## Novedades v15.1: verificación de la auditoría externa (17-nov-2026)
+
+Luis trajo una auditoría externa con 5 fallos. Se verificó cada uno contra el código real y NO se reemplazó ningún archivo con el código pegado (el kalshi.js pegado era una versión recortada y le faltaban funciones que App.jsx usa, como windowOutcome y la firma actual de cashOutDecision).
+
+- **FALLO 1 — VERDADERO (en sustancia):** tras el comentario de §5 había texto duplicado fuera del comentario (`Sin botones de intervalo... */}`), que esbuild avisaba ("}" no válido en JSX) y se veía en pantalla. El build NO se rompía (pasaba con aviso), como decía la auditoría. Corregido: texto duplicado eliminado; el build ya no avisa.
+- **FALLO 2 — FALSO:** el P&L del NO ya era correcto. El precio actual es el precio DEL LADO que tienes: el servidor calcula `curPrice = yes ? yesPrice : 100 - yesPrice` y el precio medio sale de los fills de ese mismo lado, así que `(cur − avg) × cantidad / 100` vale para SÍ y para NO. La auditoría asumía que `cur` era el precio SÍ.
+- **FALLO 3 — FALSO:** `entryPrice` ya estaba validado: `Number('') = 0` y `Number('abc') = NaN`, `cashOutDecision` devuelve SIN POSICIÓN si no hay entrada válida y el botón de guardar bloquea `!kalshiEntryNum || <= 0`; `fmt(NaN)` muestra '—'. No hay ninguna comparación de entryPrice contra el objetivo de Kalshi.
+- **FALLO 4 — PARCIALMENTE VERDADERO:** la reconexión en sí NO borraba el estado (connectWs no limpia value/avg60s), pero había dos huecos reales: (a) un tick del WS sin `avg_60s_data` sobrescribía el promedio con null; (b) un error del sondeo en el cliente borraba todo el `brti` con `setBrti({source:'coinbase'...})`. Corregido: nuevo `mergeBrtiTick` en server/brti.js (solo sobrescribe campos no nulos) y el sondeo retiene el último valor de Kalshi marcándolo como desactualizado.
+- **FALLO 5 — FALSO:** `activeTab` es una constante `'kalshi'` (v14: una sola pantalla, no hay pestañas), `symbol` es `'BTC'` y `user` solo cambia en login/logout (`/me` no se sondea; el apodo vive en localStorage). Endurecido: el efecto BRTI depende ahora de `user?.id` en vez del objeto entero.
+- **Error extra (del código pegado Y del código real):** `liveDecision` devolvía SAL AHORA con color verde (#22c55e) cuando vas ganando y la señal va en contra. Corregido a rojo (#ef4444), como las demás salidas.
+
+Pruebas: `tests-v15.1.mjs` (30).
+
 ## Novedades v15: Referencia en vivo primero + corrección del promedio de 60 s (17-nov-2026)
 
 Pedido de Luis: que lo primero arriba sea la referencia en tiempo real (el valor de BTC de Kalshi, actualizándose lo más rápido posible) y sobre ella la predicción que avise si, según su posición y el valor, puede perder o no, y si es momento de sacar o de invertir más.
