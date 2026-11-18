@@ -1,7 +1,6 @@
-// Signals.jsx — v15.3: §4 Señales del mercado (veredicto 15m, fuerza,
-// índice de coincidencia, aviso de señal débil, backtest 15m medido
-// como liquida Kalshi, razones) + ¿Cobro o me quedo? (posición virtual).
-// Solo presenta: los datos y los manejadores llegan por props desde App.jsx.
+// Signals.jsx — v15.3 / v15.5: §4 Señales del mercado (veredicto 15m, fuerza,
+// índice de coincidencia, desglose multitemporal en vivo, aviso de señal débil,
+// backtest 15m medido como liquida Kalshi, razones) + ¿Cobro o me quedo? (posición virtual).
 import { strengthForScore } from '../kalshi.js';
 import { isCoinFlip } from '../stats.js';
 
@@ -11,7 +10,7 @@ export default function Signals({
   kalshiEntryPrice, onKalshiEntryPrice, kalshiDir, onKalshiDir,
   kalshiAmount, onKalshiAmount, onSaveKalshiPosition, onClearKalshiPosition,
   kalshiMsg, kalshiDecision, kalshiPrice, kalshiEntryNum, kalshiExitPrice,
-  kalshiAtr, currency, currencySym, fmt,
+  kalshiAtr, currency, currencySym, fmt, marketMovement = null,
 }) {
   return (
     <>
@@ -24,6 +23,14 @@ export default function Signals({
           <span>Índice de coincidencia: <b>{kalshiProbAdj}/100*</b></span>
         </div>
       </div>
+      {marketMovement && (
+        <div className="stats">
+          <div><span>Impulso en vivo</span><b>{marketMovement.speedLabel} ({marketMovement.impulseScore >= 0 ? `+${marketMovement.impulseScore}` : marketMovement.impulseScore})</b></div>
+          <div><span>Vela 15m actual</span><b>{marketMovement.candleDelta != null ? `${marketMovement.candleDelta >= 0 ? '+' : '−'}${fmt(Math.abs(marketMovement.candleDelta), currency)} (${marketMovement.candleDeltaPct >= 0 ? '+' : ''}${marketMovement.candleDeltaPct.toFixed(2)}%)` : '—'}</b></div>
+          <div><span>Avance 3 velas</span><b>{marketMovement.roc3Pct != null ? `${marketMovement.roc3Pct >= 0 ? '+' : ''}${marketMovement.roc3Pct.toFixed(2)}%` : '—'}</b></div>
+          <div><span>Plazos (1m / 5m / 15m / 1h)</span><b>{marketMovement.tfBreakdown.map((t) => `${t.tf}: ${t.label}`).join(' · ')}</b></div>
+        </div>
+      )}
       <p className="muted">* Índice propio (puntuación + timeframes que coinciden). NO es una probabilidad de ganar y NO es la probabilidad oficial de Kalshi. Una señal que acertó ~56% en 1h puede fallar en 15 minutos.</p>
       {kalshiBacktest.total >= 5 && kalshiBacktest.ci95 && (
         <p className="muted">Medido como liquida Kalshi (señal calculada ANTES de abrir cada ventana): acertó {kalshiBacktest.wins} de {kalshiBacktest.total} ({kalshiBacktest.pct}%; margen al 95%: {kalshiBacktest.ci95.low}–{kalshiBacktest.ci95.high}%).{isCoinFlip(kalshiBacktest.ci95) ? ' Con estas muestras no se distingue de lanzar una moneda.' : ''}</p>

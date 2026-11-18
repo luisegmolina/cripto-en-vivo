@@ -4,7 +4,7 @@ import { analyze, emaSeries, bollingerSeries } from './analysis.js';
 import { updateLastCandle, candlesSignature, mergeServerCandles } from './liveCandle.js';
 import { evaluateWindowSignal, backtestWindowSignal } from './windowOutcome.js';
 import { multiTfVerdict, reasonsFor, atr, VERDICT_TFS } from './verdict.js';
-import { window15m, kalshiVerdictForScore, estimatedProb, adjustProbForRecent, recentWinRate, cashOutDecision, suggestedExitPrice, brtiPositionOutcome, estimateSettlementPnl, liveDecision, marketRecommendation } from './kalshi.js';
+import { window15m, kalshiVerdictForScore, estimatedProb, adjustProbForRecent, recentWinRate, cashOutDecision, suggestedExitPrice, brtiPositionOutcome, estimateSettlementPnl, liveDecision, marketRecommendation, detectMarketMovement, buildBetPlan } from './kalshi.js';
 import { shouldFireAlert, shouldSignalAlert, dedupePriceAlerts } from './alerts.js';
 import { APP_URL } from './shareCard.js';
 import { getToken, register, login, me, logout, apiAuth } from './auth.js';
@@ -19,7 +19,7 @@ import AuthModal from './components/AuthModal.jsx';
 
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v15.3.1 — Corrección pantalla en blanco (v15.3) + gráfica con locale fijo';
+const VERSION_LABEL = 'v15.5 — Movimientos del mercado en vivo + plan de apuesta SÍ/NO con ventaja';
 
 // v15.2: setInterval que no consulta al servidor con la pestaña oculta y se
 // pone al día en cuanto vuelves a ella. Devuelve la función que lo detiene.
@@ -88,18 +88,11 @@ export default function App() {
   // Antes se llamaba [interval, setInterval] y eso eclipsaba el
   // setInterval global y causaba el bucle "Maximum update depth exceeded".
   // Nunca nombrar un setter setInterval.
-  // v10: al entrar, el intervalo es SIEMPRE 1h. No se persiste la
-  // selección entre sesiones: si en la sesión anterior se quedó en
-  // 1m (o quedó guardado un '1m' viejo), al cargar se vuelve a 1h.
-  // El aviso "1m es ruido" solo sale si el usuario cambia a 1m a mano.
   const [candleInterval, setCandleInterval] = useState('15m');
 
   // v14: UNA SOLA PANTALLA. No hay pestañas: la app es solo Kalshi
   // (BRTI en vivo, precio objetivo, gráfica 15m y señales). activeTab
   // es siempre 'kalshi' y el intervalo de velas es siempre 15m.
-  // Las demás secciones (Mercados, Gráfico y señal, Cartera, Liga)
-  // ya no se muestran en la vista; el backend, la lógica y los datos
-  // siguen intactos (solo se limpió la pantalla).
   const activeTab = 'kalshi';
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
@@ -111,10 +104,6 @@ export default function App() {
   const [kalshiDir, setKalshiDir] = useState(kalshiPos.dir || 'up');
   const [kalshiAmount, setKalshiAmount] = useState(kalshiPos.amount || '100');
   const [kalshiMsg, setKalshiMsg] = useState('');
-  // v13.4: decisiones de las posiciones REALES abiertas, que sube
-  // KalshiConnect (onRealDecision) para el banner debajo del
-  // veredicto. Se actualiza solo si cambia (comparación por JSON en
-  // el setter) para no re-renderizar en bucle con cada tick.
   const [realDecisions, setRealDecisions] = useState([]);
   const handleRealDecisions = (list) => {
     setRealDecisions((prev) => {
@@ -122,22 +111,11 @@ export default function App() {
       return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
     });
   };
-  // v13.2: mercado actual KXBTC15M de la API pública de Kalshi (precio
-  // objetivo + precios SÍ/NO). Solo BTC: Kalshi no tiene mercados de
-  // 15 min para las demás criptos. null = aún no cargado; source
-  // 'coinbase' = Kalshi falló y se cae a Coinbase con aviso.
   const [kalshiMarket, setKalshiMarket] = useState(null);
-  // v13.5: valor BRTI en vivo de Kalshi (el número que liquida).
-  // null = aún no cargado; source 'coinbase' = sin Kalshi conectado
-  // o WS de Kalshi sin dato: se cae a Coinbase con aviso, nunca en
-  // blanco. El servidor lo actualiza por WebSocket con tu clave ya
-  // conectada; aquí solo se sondea cada 3 s con la pestaña activa.
   const [brti, setBrti] = useState(null);
   useEffect(() => { saveLS('cev_kalshi_position_v1', { entryPrice: kalshiEntryPrice, dir: kalshiDir, amount: kalshiAmount, entryScore: kalshiPos.entryScore }); }, [kalshiEntryPrice, kalshiDir, kalshiAmount]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // --- v12: USUARIOS + KALSHI SOLO LECTURA (capa encima, no reemplaza nada) ---
-  // Sin sesión, la app pública funciona igual que antes: precios, señales,
-  // cartera virtual, alertas y liga siguen siendo locales y sin registro.
+  // --- v12: USUARIOS + KALSHI SOLO LECTURA ---
   const [token, setTokenState] = useState(() => getToken());
   const [user, setUser] = useState(null);
   const [view, setView] = useState(() => (typeof window !== 'undefined' && window.location.hash === '#admin' ? 'admin' : 'app'));
@@ -149,9 +127,6 @@ export default function App() {
   const [authBusy, setAuthBusy] = useState(false);
   const serverSyncDone = useRef(false);
 
-  // Sincronización opcional cartera/alertas con el servidor: si el servidor
-  // tiene datos (trades o posiciones en la cartera, o alertas), se usan;
-  // si no tiene nada, se suben los locales. Los errores se ignoran en silencio.
   async function pullOrPushServerData() {
     try {
       const [pf, al] = await Promise.allSettled([
@@ -173,8 +148,6 @@ export default function App() {
     serverSyncDone.current = true;
   }
 
-  // Al cargar, si hay token guardado, valida la sesión. 401 = token
-  // inválido o caducado: se borra y se sigue sin sesión.
   useEffect(() => {
     const t = getToken();
     if (!t) return;
@@ -238,8 +211,6 @@ export default function App() {
   const lastChartTime = useRef(null);
   const chartRef = useRef(null);
   const chartObj = useRef(null);
-  // v13: contador que sube cada vez que se (re)crea el gráfico; el
-  // efecto de datos lo usa para repintar aunque las velas no cambien.
   const [chartReady, setChartReady] = useState(0);
   const candleSeries = useRef(null);
   const volumeSeries = useRef(null);
@@ -250,44 +221,18 @@ export default function App() {
   const bbLowerSeries = useRef(null);
   const candlesRef = useRef([]);
 
-  // v15.3: la gráfica es siempre BTC 15m con EMA 20/50 y Bollinger:
-  // sin toggles, sin RSI, sin comparar con BTC ni pantalla completa.
-
-  // v15.3: la cartera virtual y las alertas de precio ya no tienen UI
-  // (se eliminaron de la vista en v14 y el código en v15.3), pero el
-  // ESTADO se conserva: la sincronización opcional con el servidor
-  // (v12, pullOrPushServerData + subida con debounce) sigue usándolo,
-  // y las alertas guardadas siguen sonando con cada tick (efecto de
-  // abajo). Sin estado no habría nada que sincronizar.
-  // v15.3.1: estas dos declaraciones se borraron por error en la
-  // limpieza de v15.3 y la app quedaba en blanco con
-  // "ReferenceError: priceAlerts is not defined" al renderizar
-  // (línea de priceAlertsRef, durante el primer render). Restauradas
-  // tal como estaban en v15.2; el build de Vite NO detecta variables
-  // no declaradas, por eso pasó desapercibido.
+  // v15.3.1: estados conservados para sincronización v12 y alertas por tick.
   const [portfolio, setPortfolio] = useState(() => loadLS('cev_portfolio_v1', { cash: START_CASH, holdings: {}, trades: [] }));
   const [priceAlerts, setPriceAlerts] = useState(() => dedupePriceAlerts(loadLS('cev_price_alerts_v1', [])));
   const priceAlertsRef = useRef(priceAlerts);
   priceAlertsRef.current = priceAlerts;
-  // v9: anti-duplicados de alertas. Cada alerta que suena queda anotada
-  // por clave símbolo|moneda|dirección|precio con su hora; si el mismo
-  // precio vuelve a cruzarse antes de 1 h, NO vuelve a sonar ni a
-  // duplicarse en la lista (en el PDF del 10-nov la misma alerta de
-  // $73.53 sonó 4 veces). Persistido en localStorage.
   const alertCooldownRef = useRef(loadLS('cev_alert_cooldown_v1', {}));
-  // v13.1: estas dos refs faltaban en v13 — se usaban en el efecto de
-  // alerta de cambio de veredicto (abajo) pero la refactorización a
-  // pestañas borró su declaración, y el render rompía con
-  // "ReferenceError: prevVerdictKey is not defined" en producción.
   const prevVerdictKey = useRef(null);
   const lastSignalAlertRef = useRef(null);
 
   useEffect(() => { saveLS('cev_portfolio_v1', portfolio); }, [portfolio]);
   useEffect(() => { saveLS('cev_price_alerts_v1', priceAlerts); }, [priceAlerts]);
 
-  // v12: sincronización opcional con el servidor cuando hay sesión: al
-  // cambiar la cartera o las alertas, se suben con debounce de 1.5 s.
-  // Si el servidor responde error, se ignora en silencio (lo local manda).
   useEffect(() => {
     if (!user || !serverSyncDone.current) return;
     const t = setTimeout(() => {
@@ -297,10 +242,6 @@ export default function App() {
     return () => clearTimeout(t);
   }, [portfolio, priceAlerts, user]);
 
-  // v15.3: el análisis general solo alimenta los patrones del gráfico
-  // (marcadores de velas). El backtest/historial 1h se eliminó: no se
-  // mostraba desde v14 y la medida que manda es la 15m de Kalshi
-  // (backtestWindowSignal/evaluateWindowSignal, más abajo).
   const analysis = useMemo(() => analyze(candles), [candles]);
 
   // --- v8: VEREDICTO multi-timeframe (1m, 5m, 15m, 1h) ---
@@ -314,13 +255,19 @@ export default function App() {
     return out;
   }, [mtfCandles, candles, candleInterval]);
   const mtfVerdict = useMemo(() => multiTfVerdict(mtfAnalysis), [mtfAnalysis]);
-  // --- v11: cálculos del MODO KALSHI 15 MIN ---
+
+  // --- v11 / v15.5: cálculos del MODO KALSHI 15 MIN en tiempo real ---
   const kalshiPrice = ticker?.price ?? markets.find((m) => m.symbol === symbol)?.price ?? null;
   const kalshiWin = window15m(nowMs);
-  const candles15m = (mtfCandles['15m'] && mtfCandles['15m'].length >= 32)
-    ? mtfCandles['15m']
-    : (candleInterval === '15m' ? candles : []);
-  const last15mKey = candles15m.length ? `${candles15m.length}:${candles15m[candles15m.length - 1].time}` : 'empty';
+  // v15.5: priorizar `candles` cuando candleInterval === '15m' porque se
+  // actualiza cada 1 segundo con updateLastCandle (antes prefería mtfCandles['15m']
+  // y usaba una clave sin close/high/low, congelando la señal durante los 15 min).
+  const candles15m = (candleInterval === '15m' && candles.length >= 32)
+    ? candles
+    : ((mtfCandles['15m'] && mtfCandles['15m'].length >= 32)
+      ? mtfCandles['15m']
+      : (candleInterval === '15m' ? candles : []));
+  const last15mKey = candlesSignature(candles15m);
   const analysis15m = useMemo(() => (mtfAnalysis['15m'] || (candles15m.length >= 30 ? analyze(candles15m) : null)), [mtfAnalysis, last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const kalshiScore = analysis15m ? analysis15m.score : 0;
   const kalshiVerdict = kalshiVerdictForScore(kalshiScore);
@@ -336,29 +283,17 @@ export default function App() {
   const kalshiProb = estimatedProb(kalshiScore, kalshiAgreement);
   const kalshiRefCandle = candles15m.length ? candles15m[candles15m.length - 1] : null;
   const kalshiCandleOpen = kalshiRefCandle ? kalshiRefCandle.open : null;
-  // v13.2: el precio de referencia de la ventana es el PRECIO OBJETIVO
-  // de Kalshi (el precio contra el que se liquida), no el de Coinbase.
-  // Si Kalshi no lo devuelve, se cae a la apertura de la vela 15m de
-  // Coinbase (y la UI lo avisa). La señal sigue calculándose con las
-  // velas de Coinbase; la liquidación usa el índice BRTI (ver aviso).
   const kalshiTargetPrice = kalshiMarket && kalshiMarket.source === 'kalshi' ? kalshiMarket.targetPrice : null;
   const kalshiRefPrice = kalshiTargetPrice ?? kalshiCandleOpen;
   const kalshiRefSource = kalshiTargetPrice != null ? 'kalshi' : 'coinbase';
-  // v15: ¿vas GANANDO o PERDIENDO según el BRTI de Kalshi? Se decide
-  // contra el promedio de 60 s (el que liquida) para tu primera
-  // posición real abierta CON decisión; sin posición, no hay
-  // decisión que tomar y la UI lo dice ("sin posición abierta").
-  // Funciones puras (kalshi.js): brtiPositionOutcome añade "cerca
-  // de la línea" (≤30 $ del objetivo) y liveDecision da SAL AHORA /
-  // AGUANTA / INVIERTE MÁS. Nunca se inventa un resultado.
+
   const brtiArgs = {
     targetPrice: kalshiTargetPrice,
     avg60s: brti && brti.source === 'kalshi' ? brti.avg60s : null,
     value: brti && brti.source === 'kalshi' ? brti.value : null,
   };
   // v15 + CORRECCIÓN: referencia BRTI-objetivo SOLO con el promedio
-  // de 60 s (el que liquida). Si no hay promedio, null: el tick
-  // instantáneo NO se usa para la diferencia ni para ganar/perder.
+  // de 60 s (el que liquida). Si no hay promedio, null.
   const brtiRefPrice = brti && brti.source === 'kalshi' && brti.avg60s != null ? brti.avg60s : null;
   const brtiDiff = brtiRefPrice != null && kalshiTargetPrice ? brtiRefPrice - kalshiTargetPrice : null;
   const brtiDiffPct = brtiDiff != null && kalshiTargetPrice ? (brtiDiff / kalshiTargetPrice) * 100 : null;
@@ -366,27 +301,28 @@ export default function App() {
   const firstOutcome = firstRealDecision ? brtiPositionOutcome({ dir: firstRealDecision.dir, ...brtiArgs }) : null;
   const liveDecisionNow = firstRealDecision ? liveDecision({ winning: firstOutcome ? firstOutcome.winning : null, signalKey: kalshiVerdict.key, signalScore: kalshiScore, dir: firstRealDecision.dir, contractCents: firstRealDecision.currentPriceCents }) : null;
   const kalshiAtr = useMemo(() => atr(candles15m), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  // v13.4: la medida 15m es la de KALSHI (windowOutcome.js): cierre
-  // de la MISMA ventana vs su apertura (lo que liquida Kalshi), NO
-  // la vela siguiente.
   const kalshiBacktest = useMemo(() => backtestWindowSignal(candles15m), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const kalshiHist = useMemo(() => evaluateWindowSignal(candles15m, 5), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  // v13: si en las últimas ventanas la señal 15m acierta menos del
-  // 50%, no se esconde: se avisa en la pestaña Kalshi y la confianza
-  // estimada se baja (tope 60%). v13.4: además el veredicto muestra
-  // "SEÑAL DÉBIL" junto a SUBE/BAJA/ESPERAR, no solo baja la confianza.
   const kalshiRecent = recentWinRate(kalshiHist);
   const kalshiWeakSignal = Boolean(kalshiRecent && kalshiRecent.rate < 0.5);
-  // v15.3: ¿la señal 15m choca con los demás plazos? Si la mayoría de
-  // los timeframes con señal clara van en contra de la señal 15m, la
-  // recomendación del mercado (sin posición) dice ESPERAR, no inventa
-  // un lado. Sin timeframes claros no hay conflicto: no bloquea.
   const marketWantKey = kalshiVerdict.key === 'up' ? 'buy' : kalshiVerdict.key === 'down' ? 'sell' : null;
   const mtfClearRows = (mtfVerdict.rows || []).filter((r) => r.key === 'buy' || r.key === 'sell');
   const marketConflict = Boolean(marketWantKey && mtfClearRows.length > 0
     && mtfClearRows.filter((r) => r.key === marketWantKey).length / mtfClearRows.length < 0.5);
   const marketRec = marketRecommendation({ signalKey: kalshiVerdict.key, weakSignal: kalshiWeakSignal, conflict: marketConflict, recent: kalshiRecent });
   const kalshiProbAdj = adjustProbForRecent(kalshiProb, kalshiHist);
+
+  // v15.5: lectura en vivo del movimiento del mercado y plan exacto de apuesta SÍ/NO
+  const marketMovement = useMemo(() => detectMarketMovement({
+    candles15m, mtfAnalysis, spotPrice: kalshiPrice, targetPrice: kalshiTargetPrice,
+    brtiAvg60s: brtiRefPrice, atr15m: kalshiAtr,
+  }), [last15mKey, mtfAnalysis, kalshiPrice, kalshiTargetPrice, brtiRefPrice, kalshiAtr]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const betPlan = useMemo(() => buildBetPlan({
+    marketRec, movement: marketMovement, kalshiScore, kalshiProbAdj,
+    kalshiMarket, brtiDiff, kalshiAtr, remainingMs: kalshiWin.remainingMs,
+  }), [marketRec, marketMovement, kalshiScore, kalshiProbAdj, kalshiMarket, brtiDiff, kalshiAtr, kalshiWin.remainingMs]);
+
   const kalshiEntryNum = Number(kalshiEntryPrice);
   const kalshiAmountNum = Number(kalshiAmount);
   const kalshiDecision = useMemo(() => cashOutDecision({
@@ -401,8 +337,6 @@ export default function App() {
       setKalshiMsg('Pon un precio de entrada y una cantidad virtual mayores que 0.');
       return;
     }
-    // Guardar la puntuación de la señal al entrar: así la app sabe si
-    // la señal se debilitó o se dio la vuelta desde que entraste.
     setKalshiPos({ entryPrice: kalshiEntryPrice, dir: kalshiDir, amount: kalshiAmount, entryScore: kalshiScore });
     saveLS('cev_kalshi_position_v1', { entryPrice: kalshiEntryPrice, dir: kalshiDir, amount: kalshiAmount, entryScore: kalshiScore });
     setKalshiMsg(`Posición virtual guardada: apostaste a que ${kalshiDir === 'up' ? 'SUBE' : 'BAJA'} desde ${fmt(kalshiEntryNum, currency)} con ${fmt(kalshiAmountNum, currency)} virtuales. La app te dirá si cobrar o salir.`);
@@ -413,11 +347,7 @@ export default function App() {
     saveLS('cev_kalshi_position_v1', { entryPrice: '', dir: 'up', amount: '100', entryScore: null });
     setKalshiMsg('Posición virtual borrada.');
   };
-  // v13.2: mercado actual de Kalshi (precio objetivo + SÍ/NO), cada
-  // 15 s (el servidor cachea 15 s: el sondeo coincide con la caché).
-  // Es el precio contra el que se liquida la ventana. Si Kalshi
-  // falla, el servidor responde source 'coinbase' y la pantalla usa el
-  // precio de Coinbase con aviso, nunca en blanco.
+
   useEffect(() => {
     if (symbol !== 'BTC') { setKalshiMarket(null); return; }
     let alive = true;
@@ -432,14 +362,6 @@ export default function App() {
     return () => { alive = false; stop(); };
   }, [symbol]);
 
-  // v13.5: valor BRTI en vivo de Kalshi, cada 2 s con la pantalla
-  // activa y sesión iniciada (v15: de 3 s a 2 s, lo más rápido que
-  // pide Luis para la referencia y la posición en vivo). El endpoint
-  // solo lee el último tick que el servidor guarda del WebSocket; si
-  // no hay Kalshi conectado, responde connected:false y NO se abre
-  // ninguna conexión a Kalshi. Si el token caducó, apiAuth lanza y
-  // se cae a Coinbase con aviso (la sesión se limpia en el efecto
-  // de /me).
   useEffect(() => {
     if (activeTab !== 'kalshi' || symbol !== 'BTC' || !user) { setBrti(null); return; }
     let alive = true;
@@ -461,7 +383,6 @@ export default function App() {
       try {
         const t = await api(`/api/ticker?symbol=${symbol}&currency=${currency}`);
         if (!alive) return;
-        // *** GRÁFICO EN VIVO: cada tick mueve la última vela ***
         const live = updateLastCandle(candlesRef.current, t.price, candleInterval);
         if (live && live !== candlesRef.current) {
           const last = live[live.length - 1];
@@ -496,8 +417,6 @@ export default function App() {
       try {
         const c = await api(`/api/candles?symbol=${symbol}&currency=${currency}&interval=${candleInterval}`);
         if (!alive) return;
-        // El servidor puede venir con retraso (Coinbase 1m): no borrar
-        // las velas vivas más nuevas que ya creamos con los ticks.
         const list = mergeServerCandles(c.candles || [], candlesRef.current);
         const sig = candlesSignature(list);
         if (sig !== lastCandlesSig.current) {
@@ -513,7 +432,6 @@ export default function App() {
     return () => { alive = false; stops.forEach((stop) => stop()); };
   }, [symbol, currency, candleInterval]);
 
-  // Al cambiar de activo/moneda/intervalo, la vela en curso es otra.
   useEffect(() => {
     candlesRef.current = [];
     lastCandlesSig.current = '';
@@ -522,8 +440,9 @@ export default function App() {
     setCandles([]);
   }, [symbol, currency, candleInterval]);
 
-  // v8: velas de 1m, 5m, 15m y 1h para la confluencia del veredicto.
-  // Se refrescan cada 20 s (no cada segundo: la señal no cambia a cada tick).
+  // v8 / v15.5: velas de 1m, 5m, 15m y 1h para la confluencia del veredicto.
+  // v15.5: usa candlesSignature(o[tf]) para no ignorar los cambios de cierre,
+  // máximo y mínimo dentro de la vela en curso de cada temporalidad.
   useEffect(() => {
     let alive = true;
     const load = async () => {
@@ -534,7 +453,7 @@ export default function App() {
         if (r.status === 'fulfilled' && r.value.candles && r.value.candles.length) next[VERDICT_TFS[i]] = r.value.candles;
       });
       setMtfCandles((prev) => {
-        const sig = (o) => VERDICT_TFS.map((tf) => (o[tf] ? `${o[tf].length}:${o[tf][o[tf].length - 1]?.time}` : '')).join('|');
+        const sig = (o) => VERDICT_TFS.map((tf) => candlesSignature(o[tf])).join('|');
         return sig(next) === sig(prev) ? prev : next;
       });
     };
@@ -553,9 +472,6 @@ export default function App() {
       if (a.triggered || a.symbol !== symbol || a.currency !== currency) return a;
       const hit = a.direction === 'above' ? price >= a.target : price <= a.target;
       if (!hit) return a;
-      // v9: cooldown de 1 h por precio objetivo (ver alerts.js): si esta
-      // misma alerta ya sonó hace menos de 1 h, se marca como sonada
-      // pero NO vuelve a sonar ni a duplicarse en la lista de alertas.
       const res = shouldFireAlert(alertCooldownRef.current, a, nowMs);
       if (!res.fire) {
         return { ...a, triggered: true, triggeredAt: new Date().toISOString() };
@@ -572,18 +488,11 @@ export default function App() {
   }, [ticker, symbol, currency]);
 
   // --- v8/v13: ALERTA cuando el VEREDICTO cambia ---
-  // v13: el veredicto se recalcula con cada tick de la vela en curso
-  // y con cada refresco de las 4 temporalidades, así que puede cruzar
-  // el umbral varias veces en el mismo segundo (en el video del 12-nov
-  // salieron ESPERAR y VENDER a la vez, a las 19:48:54). Regla: una
-  // sola alerta de cambio de veredicto por minuto; si cambia dos veces
-  // en menos de 60 s, solo queda la última (se reemplaza, no se añade
-  // otra, y no vuelve a sonar).
   const verdictKeyNow = mtfVerdict.verdict.key;
   useEffect(() => {
     const prev = prevVerdictKey.current;
     prevVerdictKey.current = verdictKeyNow;
-    if (!prev) return; // primera carga: no es un cambio, no alertar
+    if (!prev) return;
     if (prev === verdictKeyNow) return;
     const flips = (prev === 'buy' && verdictKeyNow === 'sell') || (prev === 'sell' && verdictKeyNow === 'buy');
     const msg = flips
@@ -593,8 +502,6 @@ export default function App() {
     const chk = shouldSignalAlert(lastSignalAlertRef.current, nowMs);
     lastSignalAlertRef.current = { at: nowMs, key: verdictKeyNow };
     if (!chk.fire && chk.replace) {
-      // Dentro del mismo minuto: reemplazar la alerta anterior por
-      // esta última, sin añadir otra ni volver a notificar.
       setAlerts((a) => {
         const idx = a.findIndex((x) => x.includes('Señal') || x.includes('CAMBIO DE SEÑAL'));
         if (idx < 0) return [msg, ...a].slice(0, 20);
@@ -615,14 +522,6 @@ export default function App() {
   }, [verdictKeyNow, symbol]);
 
   // --- Gráfico de velas: creación al montar la pantalla ---
-  // v13: antes se creaba UNA sola vez al montar la app; si el
-  // contenedor aún no tenía tamaño o las velas no habían llegado, el
-  // gráfico quedaba en blanco y nada lo recreaba (eso se ve en el
-  // video del 12-nov). Después se creaba al entrar en la pestaña
-  // Gráfico y se destruía al salir. v14: no hay pestañas, la gráfica
-  // es parte de la única pantalla, así que se crea al montar y se
-  // destruye al desmontar; chartReady obliga al efecto de datos a
-  // repintar con las velas que ya hay.
   useEffect(() => {
     const el = chartRef.current;
     if (!el) return undefined;
@@ -631,10 +530,6 @@ export default function App() {
       layout: { background: { color: '#0b0f14' }, textColor: '#cbd5e1' },
       grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
       timeScale: { timeVisible: true, secondsVisible: false },
-      // v15.3.1: locale explícito. Sin él, lightweight-charts usa
-      // navigator.language y en navegadores con locale raro
-      // (p. ej. "en-US@posix") rompe con "Invalid language tag" y la
-      // gráfica queda vacía. La app ya formatea todo en es-US.
       localization: { locale: 'es-US' },
     });
     chartObj.current = chart;
@@ -652,9 +547,6 @@ export default function App() {
       ro = new ResizeObserver(() => { try { chart.applyOptions({ width: el.clientWidth }); } catch {} });
       ro.observe(el);
     } catch {}
-    // El gráfico ya existe: avisar al efecto de datos para que pinte
-    // las velas que ya llegaron (si no, se quedaría en blanco hasta
-    // que llegara una vela nueva).
     lastChartSig.current = '';
     setChartReady((n) => n + 1);
     return () => {
@@ -677,8 +569,6 @@ export default function App() {
   useEffect(() => {
     if (!candleSeries.current || !volumeSeries.current || !chartObj.current) return;
     if (!candles.length) {
-      // Sin velas no se pinta nada: vaciar las series para no dejar
-      // velas viejas de otro intervalo y que la UI diga "Cargando…".
       try { candleSeries.current.setData([]); volumeSeries.current.setData([]); } catch {}
       return;
     }
@@ -694,13 +584,11 @@ export default function App() {
       color: p.dir === 'up' ? '#22c55e' : p.dir === 'down' ? '#ef4444' : '#94a3b8',
       shape: p.dir === 'up' ? 'arrowUp' : p.dir === 'down' ? 'arrowDown' : 'circle', text: p.name,
     })));
-    // EMA 20/50 como líneas (siempre visibles).
     const toPoints = (series) => times.map((t, i) => (series[i] == null ? null : { time: t, value: series[i] })).filter(Boolean);
     try {
       ema20Series.current?.setData(toPoints(emaSeries(closes, 20)));
       ema50Series.current?.setData(toPoints(emaSeries(closes, 50)));
     } catch {}
-    // Bollinger como 3 líneas (siempre visibles).
     try {
       const bb = bollingerSeries(closes);
       const pick = (k) => times.map((t, i) => (bb[i] == null ? null : { time: t, value: bb[i][k] })).filter(Boolean);
@@ -715,8 +603,6 @@ export default function App() {
     }
   }, [candles, analysis, chartReady]);
 
-  // v12: vista admin (#admin): muestra el panel de administración en vez
-  // de la app pública. Solo entra si el usuario es admin.
   if (view === 'admin') {
     return (
       <div className="app">
@@ -755,8 +641,6 @@ export default function App() {
 
   return (
     <div className="app">
-      {/* v14: encabezado mínimo — nombre, versión y sesión. Sin
-          fuente/latencia ni botones de más. */}
       <header>
         <div><h1>₿ Cripto en Vivo</h1><p>{VERSION_LABEL}</p></div>
         <div className="row">
@@ -775,7 +659,6 @@ export default function App() {
         </div>
       </header>
 
-
       {showAuth && (
         <AuthModal showAuth={showAuth} authName={authName} onAuthName={setAuthName} authEmail={authEmail} onAuthEmail={setAuthEmail} authPassword={authPassword} onAuthPassword={setAuthPassword} authBusy={authBusy} authError={authError} onSubmit={handleAuthSubmit} onClose={() => setShowAuth(null)} onSwitchMode={(m) => { setShowAuth(m); setAuthError(''); }} />
       )}
@@ -786,13 +669,12 @@ export default function App() {
 
         <section className={`card verdict-card kalshi-card verdict-${kalshiVerdict.key === 'up' ? 'buy' : kalshiVerdict.key === 'down' ? 'sell' : 'wait'}`} aria-label="Modo Kalshi 15 minutos">
           <MyPosition user={user} realDecisions={realDecisions} brtiArgs={brtiArgs} fmt={fmt} />
-          <Decision user={user} firstRealDecision={firstRealDecision} liveDecisionNow={liveDecisionNow} marketRec={marketRec} kalshiScore={kalshiScore} kalshiReasons={kalshiReasons} />
-          <LiveReference symbol={symbol} currency={currency} kalshiWin={kalshiWin} kalshiTargetPrice={kalshiTargetPrice} kalshiMarket={kalshiMarket} kalshiPrice={kalshiPrice} kalshiRefSource={kalshiRefSource} brti={brti} brtiDiff={brtiDiff} brtiDiffPct={brtiDiffPct} fmt={fmt} user={user} />
-          <Signals kalshiVerdict={kalshiVerdict} kalshiWeakSignal={kalshiWeakSignal} kalshiScore={kalshiScore} kalshiProbAdj={kalshiProbAdj} kalshiBacktest={kalshiBacktest} kalshiRecent={kalshiRecent} kalshiReasons={kalshiReasons} kalshiEntryPrice={kalshiEntryPrice} onKalshiEntryPrice={setKalshiEntryPrice} kalshiDir={kalshiDir} onKalshiDir={setKalshiDir} kalshiAmount={kalshiAmount} onKalshiAmount={setKalshiAmount} onSaveKalshiPosition={setKalshiPosition} onClearKalshiPosition={clearKalshiPosition} kalshiMsg={kalshiMsg} kalshiDecision={kalshiDecision} kalshiPrice={kalshiPrice} kalshiEntryNum={kalshiEntryNum} kalshiExitPrice={kalshiExitPrice} kalshiAtr={kalshiAtr} currency={currency} currencySym={CUR[currency]} fmt={fmt} />
+          <Decision user={user} firstRealDecision={firstRealDecision} liveDecisionNow={liveDecisionNow} marketRec={marketRec} kalshiScore={kalshiScore} kalshiReasons={kalshiReasons} marketMovement={marketMovement} betPlan={betPlan} />
+          <LiveReference symbol={symbol} currency={currency} kalshiWin={kalshiWin} kalshiTargetPrice={kalshiTargetPrice} kalshiMarket={kalshiMarket} kalshiPrice={kalshiPrice} kalshiRefSource={kalshiRefSource} brti={brti} brtiDiff={brtiDiff} brtiDiffPct={brtiDiffPct} fmt={fmt} user={user} marketMovement={marketMovement} />
+          <Signals kalshiVerdict={kalshiVerdict} kalshiWeakSignal={kalshiWeakSignal} kalshiScore={kalshiScore} kalshiProbAdj={kalshiProbAdj} kalshiBacktest={kalshiBacktest} kalshiRecent={kalshiRecent} kalshiReasons={kalshiReasons} kalshiEntryPrice={kalshiEntryPrice} onKalshiEntryPrice={setKalshiEntryPrice} kalshiDir={kalshiDir} onKalshiDir={setKalshiDir} kalshiAmount={kalshiAmount} onKalshiAmount={setKalshiAmount} onSaveKalshiPosition={setKalshiPosition} onClearKalshiPosition={clearKalshiPosition} kalshiMsg={kalshiMsg} kalshiDecision={kalshiDecision} kalshiPrice={kalshiPrice} kalshiEntryNum={kalshiEntryNum} kalshiExitPrice={kalshiExitPrice} kalshiAtr={kalshiAtr} currency={currency} currencySym={CUR[currency]} fmt={fmt} marketMovement={marketMovement} />
           <ChartSection chartRef={chartRef} candles={candles} candlesError={candlesError} />
           <AccountBox user={user} token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} kalshiPrice={kalshiPrice} kalshiRefPrice={kalshiRefPrice} kalshiRefSource={kalshiRefSource} currency={currency} onLogout={handleLogout} onRealDecision={handleRealDecisions} onShowAuth={(m) => { setShowAuth(m); setAuthError(''); }} />
         </section>
-
 
       <footer>Fuente de datos: APIs públicas de Coinbase, Kraken, Binance US y CoinGecko, consultadas por el servidor. Precios en vivo, no inventados. {APP_URL}</footer>
     </div>

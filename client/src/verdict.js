@@ -62,26 +62,37 @@ export function reasonsFor(analysis) {
   const out = [];
   if (!analysis || analysis.rsi == null) return out;
   const r = analysis.rsi;
-  if (r < 30) out.push({ dir: 'up', icon: '▲', text: `RSI ${r.toFixed(0)}: sobreventa, el precio cayó mucho y rápido`, impact: 15 });
-  else if (r > 70) out.push({ dir: 'down', icon: '▼', text: `RSI ${r.toFixed(0)}: sobrecompra, el precio subió mucho y rápido`, impact: 15 });
-  else if (r < 40) out.push({ dir: 'up', icon: '▲', text: `RSI ${r.toFixed(0)}: cerca de sobreventa, presión vendedora perdiendo fuerza`, impact: 8 });
-  else if (r > 60) out.push({ dir: 'down', icon: '▼', text: `RSI ${r.toFixed(0)}: cerca de sobrecompra, presión compradora perdiendo fuerza`, impact: 8 });
+  if (r < 30) out.push({ dir: 'up', icon: '▲', text: `RSI ${r.toFixed(0)}: sobreventa, el precio cayó mucho y rápido (posible rebote)`, impact: 15 });
+  else if (r > 70) out.push({ dir: 'down', icon: '▼', text: `RSI ${r.toFixed(0)}: sobrecompra, el precio subió mucho y rápido (posible freno)`, impact: 15 });
+  else if (r >= 54) out.push({ dir: 'up', icon: '▲', text: `RSI ${r.toFixed(0)}: fuerza compradora activa sin llegar a sobrecompra`, impact: 9 });
+  else if (r <= 46) out.push({ dir: 'down', icon: '▼', text: `RSI ${r.toFixed(0)}: presión vendedora activa sin llegar a sobreventa`, impact: 9 });
   else out.push({ dir: 'neutral', icon: '●', text: `RSI ${r.toFixed(0)}: zona neutra, sin exceso en ningún lado`, impact: 2 });
+
+  if (analysis.ema9 != null && analysis.ema20 != null) {
+    out.push(analysis.ema9 > analysis.ema20
+      ? { dir: 'up', icon: '▲', text: 'Impulso corto alcista: la EMA 9 rápida supera a la EMA 20', impact: 15 }
+      : { dir: 'down', icon: '▼', text: 'Impulso corto bajista: la EMA 9 rápida está por debajo de la EMA 20', impact: 15 });
+  }
   if (analysis.macd) {
     const h = analysis.macd.histogram;
     out.push(h > 0
-      ? { dir: 'up', icon: '▲', text: 'MACD cruzó al alza: el impulso de corto plazo supera al de largo plazo', impact: 10 }
-      : { dir: 'down', icon: '▼', text: 'MACD cruzó a la baja: el impulso de corto plazo está por debajo del de largo plazo', impact: 10 });
+      ? { dir: 'up', icon: '▲', text: `MACD alcista${analysis.macd.rising ? ' y acelerando' : ''}: el impulso corto supera al de medio plazo`, impact: 12 }
+      : { dir: 'down', icon: '▼', text: `MACD bajista${!analysis.macd.rising ? ' y acelerando a la baja' : ''}: el impulso corto pierde frente al de medio plazo`, impact: 12 });
   }
   if (analysis.ema20 != null && analysis.ema50 != null) {
     out.push(analysis.ema20 > analysis.ema50
-      ? { dir: 'up', icon: '▲', text: 'Precio por encima de EMA 50: la tendencia de fondo es alcista', impact: 20 }
-      : { dir: 'down', icon: '▼', text: 'Precio por debajo de EMA 50: la tendencia de fondo es bajista', impact: 20 });
+      ? { dir: 'up', icon: '▲', text: 'Precio por encima de EMA 50: la tendencia de fondo es alcista', impact: 18 }
+      : { dir: 'down', icon: '▼', text: 'Precio por debajo de EMA 50: la tendencia de fondo es bajista', impact: 18 });
+  }
+  if (analysis.momentumPct != null && Math.abs(analysis.momentumPct) >= 0.08) {
+    out.push(analysis.momentumPct > 0
+      ? { dir: 'up', icon: '▲', text: `Avance reciente de +${analysis.momentumPct.toFixed(2)}% en las últimas 3 velas`, impact: 11 }
+      : { dir: 'down', icon: '▼', text: `Retroceso reciente de ${analysis.momentumPct.toFixed(2)}% en las últimas 3 velas`, impact: 11 });
   }
   if (analysis.bollinger) {
     const b = analysis.bollinger.pctB;
-    if (b < 0.2) out.push({ dir: 'up', icon: '▲', text: 'Precio pegado a la banda inferior de Bollinger: posible rebote', impact: 5 });
-    else if (b > 0.8) out.push({ dir: 'down', icon: '▼', text: 'Precio pegado a la banda superior de Bollinger: posible freno', impact: 5 });
+    if (b < 0.2) out.push({ dir: 'up', icon: '▲', text: 'Precio pegado a la banda inferior de Bollinger: posible rebote', impact: 6 });
+    else if (b > 0.8) out.push({ dir: 'down', icon: '▼', text: 'Precio pegado a la banda superior de Bollinger: posible freno', impact: 6 });
   }
   for (const p of analysis.patterns || []) {
     out.push({
@@ -90,7 +101,7 @@ export function reasonsFor(analysis) {
       impact: 12,
     });
   }
-  return out.sort((a, b) => b.impact - a.impact).slice(0, 4);
+  return out.sort((a, b) => b.impact - a.impact).slice(0, 5);
 }
 
 // ATR aproximado: media del rango real de las últimas 14 velas.

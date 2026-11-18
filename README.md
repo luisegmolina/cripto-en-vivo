@@ -277,6 +277,15 @@ ofrece un apodo local (sin contraseña, sin servidor).
   local" (sin contraseña, sin servidor), que se usa en la liga semanal
   y en la tarjeta para compartir. Nada se envía a ningún servidor.
 
+## Novedades v15.5: movimientos del mercado en tiempo real + plan exacto de apuesta SÍ/NO (18-nov-2026)
+
+1. **Desbloqueo del tiempo real en 15m y multitemporal (`App.jsx`):** `candles15m` ahora prioriza `candles` (que se mueve cada 1 segundo con cada tick de precio vía `updateLastCandle`) y `last15mKey` usa `candlesSignature(candles15m)` (con `open/high/low/close`). Además `setMtfCandles` usa `candlesSignature` en `1m`, `5m`, `15m` y `1h` para no congelar las velas dentro de la ventana.
+2. **Motor técnico calibrado sin sesgo inverso (`analysis.js` + `verdict.js`):** corregida la fórmula del RSI en zona media (30–70) que antes restaba puntos cuando el precio subía; añadida tendencia corta reactiva (`EMA 9 vs EMA 20`), aceleración del histograma `MACD` y velocidad de las últimas 3 velas (`momentumPct`).
+3. **Detector de movimientos del mercado en vivo (`detectMarketMovement` en `kalshi.js`):** mide al segundo el índice de impulso (-100 a +100), la diferencia contra el Precio Objetivo de Kalshi en `$`, `%` y múltiplos de `ATR 15m`, la variación de la vela 15m actual y la alineación de `1m`, `5m`, `15m` y `1h`.
+4. **Plan exacto de apuesta en Kalshi (`buildBetPlan` en `kalshi.js` + `Decision.jsx`):** muestra en §2 qué contrato exacto comprar (`Contrato SÍ (SUBE)` o `Contrato NO (BAJA)`), su precio actual en centavos, la ganancia potencial y ROI %, la ventaja estimada (`Edge` y Valor Esperado `EV` por contrato), la inclinación táctica en vivo cuando la puntuación 15m aún está entre −24 y +24, y las reglas claras de entrada, toma de ganancias (`≥85¢`) y corte de pérdida (`≤15¢`).
+
+**Matices de la verificación (Muse, 18-nov-2026):** (a) el congelamiento no afectaba a la puntuación 15m en sí — esa ya se actualizaba cada segundo vía `mtfAnalysis['15m']` sobre `candles` en vivo —, sí congelaba los plazos 1m/5m/1h, el ATR, el backtest y el historial reciente; la v15.5 los desbloquea a todos. (b) Backtest honesto con velas reales de Coinbase (320 ventanas, sin lookahead): la señal nueva da más señales claras (210 vs 96) con el mismo acierto, 46% en ambos casos — no mejora la precisión, solo la frecuencia; sigue sin distinguirse de una moneda. (c) La ventaja (Edge/EV) se calcula con la probabilidad estimada por la puntuación, no con el acierto medido (46%): la caja de §2 lo advierte en pantalla. (d) Con señal 15m neutra la app ahora puede recomendar una apuesta táctica por impulso en vez de ESPERAR (cambio deliberado respecto a v15.4).
+
 ## Novedades v15.4: la recomendación sin posición ahora sí dice a qué apostar (18-nov-2026)
 
 Luis repitió el pedido porque la caja de v15.3 casi siempre decía ESPERAR. Reproducido con datos en vivo (velas reales de Coinbase): la señal 15m estaba clara en SUBE (puntuación 29) y aun así la caja decía ESPERAR.
@@ -904,3 +913,4 @@ cripto-en-vivo-react/
   worker (ver sección v7, punto 6).
 - Liga con cuentas reales y rivales humanos: no existe. La liga demo/local
   se eliminó del todo en v15.3 (código y vista); no hay liga ni rivales.
+

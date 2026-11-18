@@ -161,7 +161,12 @@ if (!(await serverUp())) {
   const tail = candles.slice(-(120 + 31));
   let wins = 0, total = 0;
   for (let i = 30; i < tail.length - 1; i++) {
-    const a = analyze(tail.slice(0, i + 1));
+    // v15.5: el recuento manual usaba tail.slice(0, i + 1) — CON el cierre
+    // de la ventana que juzga (el lookahead que v15.2 quitó de la función).
+    // Con el analyze nuevo, más sensible, eso ya no coincide con la función
+    // (51/84 manual con lookahead vs 35/83 honesto). El recuento debe usar
+    // slice(0, i), solo velas anteriores, igual que backtestWindowSignal.
+    const a = analyze(tail.slice(0, i));
     if (a.label === 'Sin señal clara') continue;
     total++;
     const up = a.label === 'Posible subida';

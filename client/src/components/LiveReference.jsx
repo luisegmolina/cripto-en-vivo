@@ -1,9 +1,9 @@
-// LiveReference.jsx — v15.3: §3 Referencia en tiempo real (BRTI, objetivo,
-// diferencia, cuenta atrás, SÍ/NO). Solo presenta: los datos llegan por
-// props desde App.jsx; la lógica (sondeos, promedio de 60 s) no vive aquí.
+// LiveReference.jsx — v15.3 / v15.5: §3 Referencia en tiempo real (BRTI, objetivo,
+// diferencia, distancia en ATR, cuenta atrás, SÍ/NO). Solo presenta: los datos llegan
+// por props desde App.jsx; la lógica (sondeos, promedio de 60 s) no vive aquí.
 import { fmtClock, fmtCountdown } from '../kalshi.js';
 
-export default function LiveReference({ symbol, currency, kalshiWin, kalshiTargetPrice, kalshiMarket, kalshiPrice, kalshiRefSource, brti, brtiDiff, brtiDiffPct, fmt, user }) {
+export default function LiveReference({ symbol, currency, kalshiWin, kalshiTargetPrice, kalshiMarket, kalshiPrice, kalshiRefSource, brti, brtiDiff, brtiDiffPct, fmt, user, marketMovement = null }) {
   return (
     <>
       <p className="verdict-kicker">MODO KALSHI 15 MIN · {symbol} · VENTANA DE 15 MINUTOS · EDUCATIVO, NO ES RECOMENDACIÓN DE APUESTA</p>
@@ -21,15 +21,6 @@ export default function LiveReference({ symbol, currency, kalshiWin, kalshiTarge
         <p className="warn">⚠️ Precio de referencia de Coinbase, no de Kalshi: la API pública de Kalshi no devolvió el mercado actual, así que la referencia es la apertura de la vela 15m de Coinbase.</p>
       )}
 
-      {/* v13.5: VALOR EN VIVO DE KALSHI (BRTI) — el número que
-          liquida la ventana, no Coinbase. El promedio de 60 s es
-          el que decide: si al cerrar está por encima del objetivo
-          gana SÍ, si no gana NO. GANANDO/PERDIENDO se calcula
-          contra ese promedio para tu primera posición real
-          abierta; sin posición real, solo se dice si el BRTI está
-          por encima o por debajo del objetivo. Sin Kalshi
-          conectado o sin dato del WS, se muestra Coinbase con
-          aviso, nunca en blanco y nunca un número inventado. */}
       {brti == null ? (
         <p className="muted">Cargando valor en vivo de Kalshi (BRTI)…</p>
       ) : brti.source === 'kalshi' && brti.value != null ? (
@@ -37,7 +28,7 @@ export default function LiveReference({ symbol, currency, kalshiWin, kalshiTarge
           <b style={{ fontSize: 26 }}>BRTI ahora: {fmt(brti.value, currency)}</b>
           <span>Promedio de 60 s (el que liquida): <b>{brti.avg60s != null ? fmt(brti.avg60s, currency) : '— (aún no disponible: sin promedio no se puede saber si vas ganando; el valor instantáneo no liquida)'}</b>{brti.avg15mFinal != null && (<> · Promedio final de la ventana: <b>{fmt(brti.avg15mFinal, currency)}</b></>)}</span>
           {kalshiTargetPrice && brtiDiff != null && (
-            <span>Diferencia contra el objetivo {fmt(kalshiTargetPrice, currency)}: <b className={brtiDiff >= 0 ? 'up' : 'down'}>{brtiDiff >= 0 ? '+' : '−'}{fmt(Math.abs(brtiDiff), currency)} ({brtiDiffPct >= 0 ? '+' : ''}{brtiDiffPct.toFixed(3)}%)</b> · referencia: promedio de 60 s</span>
+            <span>Diferencia contra el objetivo {fmt(kalshiTargetPrice, currency)}: <b className={brtiDiff >= 0 ? 'up' : 'down'}>{brtiDiff >= 0 ? '+' : '−'}{fmt(Math.abs(brtiDiff), currency)} ({brtiDiffPct >= 0 ? '+' : ''}{brtiDiffPct.toFixed(3)}%)</b> · referencia: promedio de 60 s{marketMovement && marketMovement.atrMultiple != null ? ` · distancia: ${marketMovement.atrMultiple >= 0 ? '+' : ''}${marketMovement.atrMultiple.toFixed(2)} ATR 15m` : ''}</span>
           )}
           {kalshiTargetPrice && brtiDiff == null && (
             <span className="muted">Promedio de 60 s no disponible: sin él no se puede saber si vas ganando ni la diferencia contra el objetivo. El valor instantáneo de arriba no liquida.</span>
@@ -48,7 +39,7 @@ export default function LiveReference({ symbol, currency, kalshiWin, kalshiTarge
         <div className="signal" style={{ borderColor: '#f59e0b' }}>
           <b style={{ fontSize: 22 }}>⚠️ Sin valor en vivo de Kalshi</b>
           <span>{user ? (brti.status === 'error' ? `El WebSocket de Kalshi no está dando el valor (${brti.error || 'sin dato'})` : 'Aún no llega el primer tick de Kalshi') : 'Entra con tu cuenta y conecta Kalshi para ver el valor en vivo que liquida'} — se muestra el precio de Coinbase mientras tanto.</span>
-          <span>Precio de Coinbase ahora: <b>{kalshiPrice ? fmt(kalshiPrice, currency) : '—'}</b> · puede diferir del de liquidación (BRTI).</span>
+          <span>Precio de Coinbase ahora: <b>{kalshiPrice ? fmt(kalshiPrice, currency) : '—'}</b> · puede diferir del de liquidación (BRTI).{kalshiTargetPrice && kalshiPrice ? ` Diferencia orientativa Spot vs objetivo: ${kalshiPrice - kalshiTargetPrice >= 0 ? '+' : '−'}${fmt(Math.abs(kalshiPrice - kalshiTargetPrice), currency)}.` : ''}</span>
           <span className="muted">Actualizado: {brti.updatedAt ? new Date(brti.updatedAt).toLocaleTimeString('es-US', { hour12: false }) : '—'}</span>
         </div>
       )}

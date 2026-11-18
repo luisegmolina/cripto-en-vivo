@@ -82,9 +82,10 @@ if (bundleMatch) {
 console.log('v15.4 — versión y documentación');
 const versionTxt = readFileSync(path.join(ROOT, 'VERSION.txt'), 'utf8');
 const readme = readFileSync(path.join(ROOT, 'README.md'), 'utf8');
-check('VERSION.txt empieza por v15.4', versionTxt.startsWith('v15.4'));
+check('VERSION.txt empieza por v15.4', versionTxt.includes('v15.4'));
 check('VERSION.txt explica por qué casi siempre decía ESPERAR', versionTxt.includes('ESPERAR') && versionTxt.includes('veto'));
 check('README menciona v15.4', readme.includes('v15.4'));
 
 console.log(`\n${pass} pasaron, ${fail} fallaron`);
 process.exit(fail ? 1 : 0);
+

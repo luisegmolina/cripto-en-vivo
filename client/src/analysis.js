@@ -49,7 +49,11 @@ export function macd(closes) {
   const line = lines[lines.length - 1];
   const signal = sig[sig.length - 1];
   if (signal == null) return null;
-  return { line, signal, histogram: line - signal };
+  const prevLine = lines.length >= 2 ? lines[lines.length - 2] : line;
+  const prevSig = sig.length >= 2 && sig[sig.length - 2] != null ? sig[sig.length - 2] : signal;
+  const histogram = line - signal;
+  const prevHistogram = prevLine - prevSig;
+  return { line, signal, histogram, prevHistogram, rising: histogram > prevHistogram };
 }
 export function bollinger(closes, period = 20) {
   if (closes.length < period) return null;
@@ -109,21 +113,103 @@ export function bollingerSeries(closes, period = 20) {
   return out;
 }
 
+// v15.5: analyze() calibrado para detectar con precisión tanto la tendencia
+// de fondo (EMA 20/50) como el movimiento corto en tiempo real (EMA 9/20,
+// impulso de las últimas 3 velas, presión de la vela actual y RSI sin el
+// sesgo inverso en zona 30-70 que antes restaba puntos cuando el precio subía).
 export function analyze(candles) {
-  if (!candles || candles.length < 30) return { score: 0, label: 'Sin señal clara', detail: 'Faltan velas para calcular los indicadores.', rsi: null, macd: null, ema20: null, ema50: null, bollinger: null, patterns: [] };
+  if (!candles || candles.length < 30) {
+    return {
+      score: 0, label: 'Sin señal clara', strength: 'Débil',
+      detail: 'Faltan velas para calcular los indicadores.',
+      rsi: null, macd: null, ema9: null, ema20: null, ema50: null,
+      bollinger: null, patterns: [], momentumPct: 0, candleChangePct: 0,
+    };
+  }
   const closes = candles.map((c) => c.close);
+  const lastPrice = closes[closes.length - 1];
+  const lastCandle = candles[candles.length - 1];
   const r = rsi(closes), m = macd(closes);
-  const e20 = ema(closes, 20), e50 = ema(closes, 50);
+  const e9 = ema(closes, 9), e20 = ema(closes, 20), e50 = ema(closes, 50);
   const b = bollinger(closes);
   const patterns = detectPatterns(candles);
-  let score = 0; const parts = [];
-  if (e20 != null && e50 != null) { const s = e20 > e50 ? 20 : -20; score += s; parts.push(`Tendencia EMA 20/50: ${s}`); }
-  if (m) { const s = m.histogram > 0 ? 10 : -10; score += s; parts.push(`MACD: ${s}`); }
-  if (r != null) { const s = r < 30 ? 15 : r > 70 ? -15 : Math.round((50 - r) / 5); score += s; parts.push(`RSI ${r.toFixed(1)}: ${s}`); }
-  if (b) { const s = b.pctB < 0.2 ? 5 : b.pctB > 0.8 ? -5 : 0; score += s; parts.push(`Bollinger: ${s}`); }
-  for (const p of patterns) { const s = p.dir === 'up' ? 12 : p.dir === 'down' ? -12 : 0; score += s; parts.push(`${p.name}: ${s}`); }
+
+  // Impulso corto (variación de las últimas 3 velas y de la vela en curso).
+  const prev3 = closes[Math.max(0, closes.length - 4)];
+  const momentumPct = prev3 > 0 ? ((lastPrice - prev3) / prev3) * 100 : 0;
+  const candleChangePct = lastCandle.open > 0 ? ((lastCandle.close - lastCandle.open) / lastCandle.open) * 100 : 0;
+
+  let score = 0;
+  const parts = [];
+
+  // 1. Tendencia de fondo (EMA 20 vs EMA 50; o precio vs EMA 20 si aún hay <50 velas)
+  if (e20 != null && e50 != null) {
+    const s = e20 > e50 ? 16 : -16;
+    score += s;
+    parts.push(`Tendencia EMA 20/50: ${s > 0 ? '+' : ''}${s}`);
+  } else if (e20 != null) {
+    const s = lastPrice >= e20 ? 12 : -12;
+    score += s;
+    parts.push(`Precio vs EMA 20: ${s > 0 ? '+' : ''}${s}`);
+  }
+
+  // 2. Tendencia corta reactiva (EMA 9 vs EMA 20 + posición del precio actual)
+  if (e9 != null && e20 != null) {
+    let s = e9 > e20 ? 10 : -10;
+    if (lastPrice > e9 && e9 > e20) s += 5;
+    else if (lastPrice < e9 && e9 < e20) s -= 5;
+    score += s;
+    parts.push(`Impulso corto EMA 9/20: ${s > 0 ? '+' : ''}${s}`);
+  }
+
+  // 3. MACD (12, 26, 9) + aceleración del histograma
+  if (m) {
+    let s = m.histogram > 0 ? 12 : -12;
+    if (m.histogram > 0 && m.rising) s += 4;
+    else if (m.histogram < 0 && !m.rising) s -= 4;
+    score += s;
+    parts.push(`MACD: ${s > 0 ? '+' : ''}${s}`);
+  }
+
+  // 4. RSI(14) de Wilder: extremos (<30 sobreventa, >70 sobrecompra) y
+  // acompañamiento del impulso en zona 30-70 (v15.5: antes restaba cuando
+  // el precio subía con fuerza entre 50 y 70, anulando señales claras).
+  if (r != null) {
+    let s = 0;
+    if (r < 30) s = 15;
+    else if (r > 70) s = -15;
+    else if (r >= 54) s = Math.min(10, Math.round((r - 50) / 2));
+    else if (r <= 46) s = Math.max(-10, Math.round((r - 50) / 2));
+    score += s;
+    parts.push(`RSI ${r.toFixed(1)}: ${s > 0 ? '+' : ''}${s}`);
+  }
+
+  // 5. Velocidad de las últimas 3 velas + vela actual
+  const momScore = Math.abs(momentumPct) >= 0.08
+    ? (momentumPct > 0 ? Math.min(12, Math.round(momentumPct * 40)) : Math.max(-12, Math.round(momentumPct * 40)))
+    : (candleChangePct > 0.04 ? 5 : candleChangePct < -0.04 ? -5 : 0);
+  if (momScore !== 0) {
+    score += momScore;
+    parts.push(`Movimiento 3v (${momentumPct >= 0 ? '+' : ''}${momentumPct.toFixed(2)}%): ${momScore > 0 ? '+' : ''}${momScore}`);
+  }
+
+  // 6. Bandas de Bollinger y patrones de velas
+  if (b) {
+    const s = b.pctB < 0.2 ? 6 : b.pctB > 0.8 ? -6 : 0;
+    if (s !== 0) { score += s; parts.push(`Bollinger: ${s > 0 ? '+' : ''}${s}`); }
+  }
+  for (const p of patterns) {
+    const s = p.dir === 'up' ? 12 : p.dir === 'down' ? -12 : 0;
+    score += s;
+    parts.push(`${p.name}: ${s > 0 ? '+' : ''}${s}`);
+  }
+
   score = Math.max(-100, Math.min(100, score));
   const label = score >= 25 ? 'Posible subida' : score <= -25 ? 'Posible bajada' : 'Sin señal clara';
   const strength = Math.abs(score) >= 60 ? 'Fuerte' : Math.abs(score) >= 25 ? 'Moderada' : 'Débil';
-  return { score, label, strength, detail: parts.join(' · '), rsi: r, macd: m, ema20: e20, ema50: e50, bollinger: b, patterns };
+  return {
+    score, label, strength, detail: parts.join(' · '),
+    rsi: r, macd: m, ema9: e9, ema20: e20, ema50: e50,
+    bollinger: b, patterns, momentumPct, candleChangePct,
+  };
 }

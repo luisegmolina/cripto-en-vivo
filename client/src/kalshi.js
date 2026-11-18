@@ -277,6 +277,187 @@ export function marketRecommendation({ signalKey, weakSignal = false, conflict =
   return { key: 'wait', label: 'ESPERAR', side: null, warnings, reason: 'La señal 15m no es clara en esta ventana: ni SUBE ni BAJA con fuerza. Esperar a que se defina o a la próxima ventana.' };
 }
 
+// v15.5: DETECTOR DE MOVIMIENTOS DEL MERCADO EN TIEMPO REAL.
+// Mide con precisión qué está haciendo BTC ahora mismo dentro de la
+// ventana de 15 minutos:
+// - Distancia al Precio Objetivo de Kalshi (en $, % y múltiplos de ATR 15m).
+// - Movimiento dentro de la vela 15m actual y avance de las últimas 3 velas.
+// - Alineación en tiempo real de las 4 temporalidades (1m, 5m, 15m, 1h).
+// - Puntuación de impulso en vivo (impulseScore, -100..+100) y diagnóstico claro.
+export function detectMarketMovement({ candles15m = [], mtfAnalysis = {}, spotPrice = null, targetPrice = null, brtiAvg60s = null, atr15m = null } = {}) {
+  const num = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+  const lastCandle = candles15m && candles15m.length ? candles15m[candles15m.length - 1] : null;
+  const prev3Candle = candles15m && candles15m.length >= 4 ? candles15m[candles15m.length - 4] : null;
+
+  const liveRef = num(brtiAvg60s) ?? num(spotPrice) ?? (lastCandle ? num(lastCandle.close) : null);
+  const windowOpen = num(targetPrice) ?? (lastCandle ? num(lastCandle.open) : null);
+  const atrVal = num(atr15m) && num(atr15m) > 0 ? num(atr15m) : null;
+
+  const windowDelta = (liveRef != null && windowOpen != null && windowOpen > 0) ? liveRef - windowOpen : null;
+  const windowDeltaPct = (windowDelta != null && windowOpen > 0) ? (windowDelta / windowOpen) * 100 : null;
+  const atrMultiple = (windowDelta != null && atrVal) ? windowDelta / atrVal : null;
+
+  const candleDelta = lastCandle ? lastCandle.close - lastCandle.open : null;
+  const candleDeltaPct = (lastCandle && lastCandle.open > 0) ? ((lastCandle.close - lastCandle.open) / lastCandle.open) * 100 : null;
+  const roc3Pct = (lastCandle && prev3Candle && prev3Candle.close > 0)
+    ? ((lastCandle.close - prev3Candle.close) / prev3Candle.close) * 100
+    : null;
+
+  const tfs = ['1m', '5m', '15m', '1h'];
+  const tfBreakdown = tfs.map((tf) => {
+    const a = mtfAnalysis && mtfAnalysis[tf] ? mtfAnalysis[tf] : null;
+    if (!a || a.score == null) return { tf, score: null, dir: 'neutral', label: 'Sin dato' };
+    const dir = a.score >= 15 ? 'up' : a.score <= -15 ? 'down' : 'neutral';
+    const label = dir === 'up' ? '▲ SUBE' : dir === 'down' ? '▼ BAJA' : '● Lateral';
+    return { tf, score: a.score, dir, label };
+  });
+
+  const upTfs = tfBreakdown.filter((t) => t.dir === 'up').length;
+  const downTfs = tfBreakdown.filter((t) => t.dir === 'down').length;
+
+  let impulseScore = 0;
+  const s15 = mtfAnalysis?.['15m']?.score ?? 0;
+  const s5 = mtfAnalysis?.['5m']?.score ?? 0;
+  const s1 = mtfAnalysis?.['1m']?.score ?? 0;
+  const s1h = mtfAnalysis?.['1h']?.score ?? 0;
+
+  impulseScore += s15 * 0.45 + s5 * 0.25 + s1 * 0.15 + s1h * 0.15;
+  if (atrMultiple != null) {
+    impulseScore += Math.max(-25, Math.min(25, atrMultiple * 22));
+  } else if (windowDeltaPct != null) {
+    impulseScore += Math.max(-20, Math.min(20, windowDeltaPct * 60));
+  }
+  impulseScore = Math.round(Math.max(-100, Math.min(100, impulseScore)));
+
+  const dir = impulseScore >= 12 ? 'up' : impulseScore <= -12 ? 'down' : 'flat';
+  const speedLabel = Math.abs(impulseScore) >= 50 ? 'Impulso fuerte' : Math.abs(impulseScore) >= 25 ? 'Movimiento moderado' : Math.abs(impulseScore) >= 12 ? 'Inclinación leve' : 'Rango lateral';
+
+  const summaryParts = [];
+  if (dir === 'up') summaryParts.push(`▲ ${speedLabel} AL ALZA (índice de impulso +${impulseScore})`);
+  else if (dir === 'down') summaryParts.push(`▼ ${speedLabel} A LA BAJA (índice de impulso ${impulseScore})`);
+  else summaryParts.push(`● Mercado en ${speedLabel.toLowerCase()} (índice ${impulseScore})`);
+
+  if (windowDelta != null) {
+    const sign = windowDelta >= 0 ? '+' : '−';
+    const atrTxt = atrMultiple != null ? ` (${atrMultiple >= 0 ? '+' : ''}${atrMultiple.toFixed(2)} ATR)` : '';
+    summaryParts.push(`${sign}$${Math.abs(windowDelta).toFixed(2)} frente al objetivo${atrTxt}`);
+  }
+  if (upTfs > 0 || downTfs > 0) {
+    summaryParts.push(`${upTfs} plazo(s) al alza vs ${downTfs} a la baja`);
+  }
+
+  return {
+    dir,
+    impulseScore,
+    speedLabel,
+    windowDelta,
+    windowDeltaPct,
+    atrMultiple,
+    candleDelta,
+    candleDeltaPct,
+    roc3Pct,
+    tfBreakdown,
+    upTfs,
+    downTfs,
+    summary: summaryParts.join(' · '),
+  };
+}
+
+// v15.5: PLAN EXACTO DE APUESTA EN KALSHI (KXBTC15M).
+// Responde sin ambigüedad a: "¿Cuáles deberían ser mis apuestas ahora mismo?"
+// - Indica el contrato exacto en Kalshi: SÍ (SUBE, paga $1 si promedio 60s >= objetivo)
+//   o NO (BAJA, paga $1 si promedio 60s < objetivo).
+// - Si la señal 15m pura está entre -24 y +24 (ESPERAR), evalúa el impulso en
+//   tiempo real (movement.impulseScore + distancia al objetivo) para dar la
+//   APUESTA TÁCTICA por impulso si el mercado ya se está moviendo (|impulseScore| >= 12),
+//   evitando que el usuario se quede a ciegas cuando hay movimiento real intra-ventana.
+// - Calcula el coste del contrato en centavos, la ganancia potencial por contrato,
+//   el ROI, la ventaja estimada (Edge = probabilidad estimada − coste implícito)
+//   y el plan operativo de entrada, cobro (≥85¢) y salida de protección (≤15¢).
+export function buildBetPlan({ marketRec, movement = null, kalshiScore = 0, kalshiProbAdj = 50, kalshiMarket = null, brtiDiff = null, kalshiAtr = null, remainingMs = null } = {}) {
+  const clearSide = marketRec && marketRec.side ? marketRec.side : null;
+  const moveDir = movement && movement.dir !== 'flat' ? movement.dir : (kalshiScore >= 12 ? 'up' : kalshiScore <= -12 ? 'down' : null);
+  const betSide = clearSide || moveDir; // 'up' | 'down' | null
+  const isTactical = !clearSide && Boolean(betSide);
+
+  const yesAsk = kalshiMarket && kalshiMarket.source === 'kalshi' && kalshiMarket.yesAskCents != null ? Number(kalshiMarket.yesAskCents) : null;
+  const noAsk = kalshiMarket && kalshiMarket.source === 'kalshi' && kalshiMarket.noAskCents != null ? Number(kalshiMarket.noAskCents) : null;
+
+  const contractCode = betSide === 'up' ? 'YES' : betSide === 'down' ? 'NO' : null;
+  const contractLabel = betSide === 'up'
+    ? 'Contrato SÍ (SUBE — gana si cierra ≥ objetivo)'
+    : betSide === 'down'
+      ? 'Contrato NO (BAJA — gana si cierra < objetivo)'
+      : 'No abrir contrato todavía (esperar ruptura)';
+  const actionHeadline = betSide === 'up'
+    ? (isTactical ? 'Inclinación en vivo: Apostar a SÍ (SUBE) — entrada táctica' : 'Apuesta recomendada: Comprar SÍ (SUBE)')
+    : betSide === 'down'
+      ? (isTactical ? 'Inclinación en vivo: Apostar a NO (BAJA) — entrada táctica' : 'Apuesta recomendada: Comprar NO (BAJA)')
+      : 'Sin ventaja direccional: NO APOSTAR en este minuto';
+
+  const askCents = betSide === 'up' ? yesAsk : betSide === 'down' ? noAsk : null;
+  const profitCents = (askCents != null && askCents > 0 && askCents < 100) ? 100 - askCents : null;
+  const roiPct = (profitCents != null && askCents > 0) ? Math.round((profitCents / askCents) * 100) : null;
+
+  // Probabilidad estimada para el lado elegido (ajustada con el impulso en vivo)
+  const effectiveProb = betSide
+    ? Math.min(85, Math.max(52, Math.round(kalshiProbAdj || (50 + Math.abs(movement?.impulseScore || kalshiScore) * 0.3))))
+    : 50;
+  const edgePts = (askCents != null && betSide) ? effectiveProb - askCents : null;
+  const evPerContractUsd = edgePts != null ? +(edgePts / 100).toFixed(2) : null;
+
+  let priceVerdict = 'Sin cotización en vivo de Kalshi';
+  if (askCents != null) {
+    if (askCents >= 85) {
+      priceVerdict = `Caro (${askCents}¢): arriesgas ${askCents}¢ para ganar solo ${100 - askCents}¢. Mal retorno/riesgo; mejor no perseguir.`;
+    } else if (askCents <= 15) {
+      priceVerdict = `Muy barato / alto riesgo (${askCents}¢): el mercado da pocas opciones; solo entrar con importe mínimo si el impulso acelera.`;
+    } else if (edgePts != null && edgePts >= 5) {
+      priceVerdict = `Buen precio (${askCents}¢): ventaja estimada de +${edgePts} pts (EV +$${evPerContractUsd.toFixed(2)} por contrato).`;
+    } else if (edgePts != null && edgePts >= -5) {
+      priceVerdict = `Precio justo (${askCents}¢): pagas ${askCents}¢ para ganar +${profitCents}¢ (+${roiPct}%).`;
+    } else {
+      priceVerdict = `Precio exigente (${askCents}¢): el contrato descuenta más probabilidad (${askCents}%) que la señal (${effectiveProb}%). Entra suave.`;
+    }
+  }
+
+  const minsLeft = remainingMs != null ? Math.max(0, Math.round(remainingMs / 60000)) : null;
+  const atrNum = kalshiAtr && kalshiAtr > 0 ? Number(kalshiAtr) : null;
+  const triggerDist = atrNum ? Math.round(atrNum * 0.35) : 35;
+
+  const entryRule = betSide === 'up'
+    ? `Comprar SÍ (SUBE)${askCents != null ? ` alrededor de ${askCents}¢` : ''} mientras el promedio BRTI se mantenga cerca o por encima del objetivo.`
+    : betSide === 'down'
+      ? `Comprar NO (BAJA)${askCents != null ? ` alrededor de ${askCents}¢` : ''} mientras el promedio BRTI se mantenga cerca o por debajo del objetivo.`
+      : `Esperar a que BTC rompa +$${triggerDist} por encima del objetivo (para apostar SÍ/SUBE) o −$${triggerDist} por debajo (para apostar NO/BAJA).`;
+
+  const takeProfitRule = betSide
+    ? 'Cobrar ganancia si tu contrato sube a ≥85¢ (casi ganado) o si vas en verde y el impulso de 1m/5m se da la vuelta.'
+    : 'Sin posición: definir entrada primero.';
+  const stopLossRule = betSide
+    ? 'Salir para limitar pérdida si tu contrato cae a ≤15¢ o si tanto el promedio BRTI de 60 s como la señal de 15m se ponen en contra.'
+    : 'No entrar mientras las temporalidades sigan planas.';
+
+  return {
+    betSide,
+    isTactical,
+    contractCode,
+    contractLabel,
+    actionHeadline,
+    askCents,
+    profitCents,
+    roiPct,
+    effectiveProb,
+    edgePts,
+    evPerContractUsd,
+    priceVerdict,
+    minsLeft,
+    entryRule,
+    takeProfitRule,
+    stopLossRule,
+  };
+}
+
 // Decisión COBRO / AGUANTO / SALGO para una posición REAL de Kalshi
 // (v13.4). La regla por SEÑAL sola no basta: en Kalshi lo que manda
 // es el PRECIO DEL CONTRATO en centavos (el contrato paga $1 si
