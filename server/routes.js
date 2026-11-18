@@ -12,6 +12,7 @@ const { encrypt, decrypt, masterKey } = require('./crypto');
 const kalshi = require('./kalshiServer');
 const brti = require('./brti');
 const paperAuditor = require('./paperAuditor');
+const liveTrader = require('./liveTrader');
 
 // v16.1 — El auditor en papel persiste sus resultados (últimas 20
 // ventanas) en cev_user_data kind 'paper_audit', solo al cerrar
@@ -19,6 +20,25 @@ const paperAuditor = require('./paperAuditor');
 paperAuditor.setPersistencia(async (userId, resultados) => {
   await db.setUserData(userId, 'paper_audit', { resultados, updatedAt: new Date().toISOString() });
 });
+
+// v16.2 — El bot en vivo persiste su registro de decisiones (máx. 50)
+// en cev_user_data kind 'live_trade_log'. El trader solo descifra la
+// clave de Kalshi en el camino de envío real (live encendido); en modo
+// would-send nunca se pide ni se descifra. El observador del trader
+// arranca perezoso y se apaga solo cuando no queda ningún auditor activo.
+liveTrader.setPersistencia(async (userId, estado) => {
+  await db.setUserData(userId, 'live_trade_log', estado);
+});
+liveTrader.setCargarEstado(async (userId) => {
+  const d = await db.getUserData(userId, 'live_trade_log').catch(() => null);
+  return d || null;
+});
+liveTrader.setCredentialsProvider(async (userId) => {
+  const conn = await db.getKalshiConnection(userId);
+  if (!conn) return null;
+  try { return { keyId: conn.keyId, privateKeyPem: decrypt(conn.privateKeyEncrypted) }; } catch { return null; }
+});
+liveTrader.ensureObservador();
 
 const router = express.Router();
 
@@ -151,6 +171,7 @@ router.delete('/kalshi/connect', auth, async (req, res) => {
   await db.deleteKalshiConnection(req.user.id);
   brti.stopBrti(req.user.id); // cierra el WebSocket BRTI de este usuario
   await paperAuditor.stopAuditor(req.user.id).catch(() => {}); // sin Kalshi no hay auditor
+  await liveTrader.kill(req.user.id, 'kalshi_disconnected').catch(() => {}); // sin Kalshi no hay bot en vivo
   res.json({ ok: true });
 });
 
@@ -219,6 +240,36 @@ router.post('/kalshi/paper-audit/stop', auth, async (req, res) => {
   const snap = await paperAuditor.stopAuditor(req.user.id);
   const conn = await db.getKalshiConnection(req.user.id);
   res.json({ ok: true, ...snap, kalshiConnected: !!conn });
+});
+
+// v16.2 — BOT EN VIVO (APAGADO por defecto). Ninguna de estas rutas
+// envía órdenes directamente: las órdenes solo salen desde
+// liveTrader.handleViableSignal al evaluar una señal viable del
+// auditor. LIVE_TRADING_ENABLED='true' en el servidor es el
+// interruptor global; sin ella, enable devuelve 403 y todo queda en
+// would-send. El kill switch (POST /kalshi/live/kill) está siempre
+// disponible y es persistente.
+router.get('/kalshi/live/status', auth, async (req, res) => {
+  await liveTrader.cargarEstadoSiHaceFalta(req.user.id);
+  const snap = liveTrader.getSnapshot(req.user.id);
+  const conn = await db.getKalshiConnection(req.user.id);
+  res.json({ ...snap, kalshiConnected: !!conn });
+});
+
+router.post('/kalshi/live/kill', auth, async (req, res) => {
+  const snap = await liveTrader.kill(req.user.id, 'manual');
+  const conn = await db.getKalshiConnection(req.user.id);
+  res.json({ ok: true, ...snap, kalshiConnected: !!conn });
+});
+
+router.post('/kalshi/live/enable', auth, async (req, res) => {
+  if (!liveTrader.isLiveEnabled()) {
+    return res.status(403).json({ error: 'El trading en vivo está apagado en el servidor (LIVE_TRADING_ENABLED no es \'true\'). Activarlo exige poner esa variable en el servidor Y una decisión explícita tuya: no se enciende solo desde la web.' });
+  }
+  const conn = await db.getKalshiConnection(req.user.id);
+  if (!conn) return res.status(400).json({ error: 'Conecta primero tu cuenta Kalshi: sin credenciales no hay nada que firmar.' });
+  const snap = await liveTrader.arm(req.user.id);
+  res.json({ ok: true, ...snap, kalshiConnected: true });
 });
 
 const posCache = new Map(); // userId -> {at, data}
