@@ -10,6 +10,7 @@ const db = require('./db');
 const { hashPassword, verifyPassword, signToken, authMiddleware, requireAdmin, loginRateLimit } = require('./auth');
 const { encrypt, decrypt, masterKey } = require('./crypto');
 const kalshi = require('./kalshiServer');
+const brti = require('./brti');
 
 const router = express.Router();
 const auth = authMiddleware(db);
@@ -120,7 +121,41 @@ router.post('/kalshi/connect', auth, async (req, res) => {
 
 router.delete('/kalshi/connect', auth, async (req, res) => {
   await db.deleteKalshiConnection(req.user.id);
+  brti.stopBrti(req.user.id); // cierra el WebSocket BRTI de este usuario
   res.json({ ok: true });
+});
+
+// v13.5 — VALOR EN VIVO DE KALSHI (BRTI) por WebSocket.
+// El servidor mantiene UNA conexión WS por usuario conectado y
+// guarda el último tick en memoria; este endpoint solo LEE ese
+// último valor (no abre conexiones nuevas por cada sondeo). Sin
+// Kalshi conectado NO se abre ninguna conexión a Kalshi y responde
+// connected:false: el cliente cae a Coinbase con aviso, nunca en
+// blanco. Si el WS falla o aún no hay tick, source es
+// 'kalshi-unavailable' y el cliente también cae a Coinbase.
+// La clave privada se descifra solo aquí, en el servidor, y nunca
+// sale en ninguna respuesta.
+router.get('/kalshi/brti', auth, async (req, res) => {
+  const conn = await db.getKalshiConnection(req.user.id);
+  if (!conn) return res.json({ connected: false, source: 'coinbase', value: null, avg60s: null, avg15mFinal: null, updatedAt: null, status: 'not_connected', error: null });
+  let privateKeyPem;
+  try { privateKeyPem = decrypt(conn.privateKeyEncrypted); } catch (e) {
+    return res.json({ connected: true, source: 'kalshi-unavailable', value: null, avg60s: null, avg15mFinal: null, updatedAt: null, status: 'error', error: 'No se pudo descifrar tu clave de Kalshi en el servidor. Desconéctala y vuelve a conectarla.' });
+  }
+  const state = brti.ensureBrti(req.user.id, { keyId: conn.keyId, privateKeyPem });
+  const ageMs = state.updatedAt ? Date.now() - new Date(state.updatedAt).getTime() : null;
+  const stale = state.value == null || ageMs == null || ageMs > 15000;
+  res.json({
+    connected: true,
+    source: state.value != null ? 'kalshi' : 'kalshi-unavailable',
+    value: state.value,
+    avg60s: state.avg60s,
+    avg15mFinal: state.avg15mFinal,
+    updatedAt: state.updatedAt,
+    status: state.status,
+    stale,
+    error: state.error,
+  });
 });
 
 const posCache = new Map(); // userId -> {at, data}

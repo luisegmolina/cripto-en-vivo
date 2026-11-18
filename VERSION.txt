@@ -1,3 +1,10 @@
+v13.5 — Valor en vivo de Kalshi (BRTI) por WebSocket (17-nov-2026)
+- La pestaña Kalshi ya muestra el VALOR EN VIVO DE KALSHI (BRTI), el número que liquida KXBTC15M, no el precio de Coinbase: valor en vivo, promedio de 60 s (el que decide la ventana), diferencia contra el objetivo en $ y %, y GANANDO/PERDIENDO según BRTI para la primera posición real abierta (brtiWinning en kalshi.js: contra el promedio de 60 s, o el valor si no hay promedio; >= liquida SÍ).
+- Servidor: nuevo server/brti.js — UNA conexión WebSocket por usuario conectado a wss://external-api-ws.kalshi.com/trade-api/ws/v2, canal cfbenchmarks_value con index_ids ["BRTI"], con la clave descifrada solo en el servidor (nueva dependencia `ws`: el WebSocket global de Node no admite cabeceras de handshake). El frontend sondea GET /api/kalshi/brti (JWT) cada 3 s con la pestaña activa y lee el último tick en memoria. Sin Kalshi conectado NO se abre ninguna conexión. Reconexión con backoff (máx. 60 s); cierre tras 5 min sin sondeo.
+- Correcciones verificadas contra docs.kalshi.com: Pyth NO liquida KXBTC15M (la liquidación es BRTI de CF Benchmarks); el WS de Kalshi exige autenticación en el handshake incluso para datos públicos (mensaje firmado `{timestamp}GET/trade-api/ws/v2`); msg.data es un STRING JSON (segunda decodificación); el timestamp del tick es received_at.
+- Fallback honesto: sin Kalshi conectado, o WS sin dato, la pestaña muestra Coinbase con el aviso "Precio de Coinbase, no de Kalshi (BRTI)", nunca en blanco. Si el promedio de 60 s no está, lo dice. Solo lectura: el WS solo lee el índice, sin canales de órdenes ni escritura.
+- Pruebas tests-v13.5.mjs: parseo del mensaje real (data string, avg60s, promedio final), firma del handshake Ed25519 y RSA, brtiWinning, sin conexión no hay WS, cableado y bundle.
+
 v13.4 — Medición Kalshi real + decisión por precio del contrato (13-nov-2026)
 - Medición 15m CORREGIDA (fallo metodológico): "Últimas ventanas" y el
   backtest 15m comparaban el cierre de la vela SIGUIENTE con el cierre

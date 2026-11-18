@@ -74,7 +74,7 @@ ok('sin segundo aviso BRTI en KalshiConnect', !kcSrc.includes('BRTI'));
 
 // 6. Versión.
 console.log('— versión —');
-ok('VERSION.txt empieza por v13.4', versionTxt.startsWith('v13.4'));
-ok('VERSION_LABEL v13.4 en App.jsx', appSrc.includes("VERSION_LABEL = 'v13.4"));
+ok('VERSION.txt empieza por v13.5', versionTxt.startsWith('v13.5'));
+ok('VERSION_LABEL v13.5 en App.jsx', appSrc.includes("VERSION_LABEL = 'v13.5"));
 
 console.log(`\ntests-v13.3: ${pass} pasaron`);

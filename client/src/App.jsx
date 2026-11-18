@@ -6,7 +6,7 @@ import { fearGreedEstimate, heatToday, isoWeekKey, rivalsForWeek } from './marke
 import { backtestSignal } from './backtest.js';
 import { evaluateWindowSignal, backtestWindowSignal } from './windowOutcome.js';
 import { multiTfVerdict, reasonsFor, tradePlan, signalHistory, atr, VERDICT_TFS } from './verdict.js';
-import { KALSHI_WINDOW_MS, window15m, fmtClock, fmtCountdown, kalshiVerdictForScore, strengthForScore, estimatedProb, adjustProbForRecent, recentWinRate, cashOutDecision, suggestedExitPrice } from './kalshi.js';
+import { KALSHI_WINDOW_MS, window15m, fmtClock, fmtCountdown, kalshiVerdictForScore, strengthForScore, estimatedProb, adjustProbForRecent, recentWinRate, cashOutDecision, suggestedExitPrice, brtiWinning } from './kalshi.js';
 import { MISSIONS, levelForXp, xpIntoLevel, XP_PER_LEVEL } from './missions.js';
 import { screenOpportunities } from './screener.js';
 import { shouldFireAlert, shouldSignalAlert, ALERT_COOLDOWN_MS, dedupePriceAlerts } from './alerts.js';
@@ -25,7 +25,7 @@ const ASSETS = [
 const INTERVALS = ['1m', '5m', '15m', '1h', '6h', '1d'];
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v13.4 — Medición Kalshi real + decisión por precio del contrato';
+const VERSION_LABEL = 'v13.5 — Valor en vivo de Kalshi (BRTI) por WebSocket';
 
 const ACHIEVEMENTS = [
   { id: 'primera_operacion', name: 'Primera operación virtual', desc: 'Compra o vende por primera vez con dinero virtual.' },
@@ -177,6 +177,12 @@ export default function App() {
   // 15 min para las demás criptos. null = aún no cargado; source
   // 'coinbase' = Kalshi falló y se cae a Coinbase con aviso.
   const [kalshiMarket, setKalshiMarket] = useState(null);
+  // v13.5: valor BRTI en vivo de Kalshi (el número que liquida).
+  // null = aún no cargado; source 'coinbase' = sin Kalshi conectado
+  // o WS de Kalshi sin dato: se cae a Coinbase con aviso, nunca en
+  // blanco. El servidor lo actualiza por WebSocket con tu clave ya
+  // conectada; aquí solo se sondea cada 3 s con la pestaña activa.
+  const [brti, setBrti] = useState(null);
   useEffect(() => { saveLS('cev_kalshi_position_v1', { entryPrice: kalshiEntryPrice, dir: kalshiDir, amount: kalshiAmount, entryScore: kalshiPos.entryScore }); }, [kalshiEntryPrice, kalshiDir, kalshiAmount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- v12: USUARIOS + KALSHI SOLO LECTURA (capa encima, no reemplaza nada) ---
@@ -512,6 +518,17 @@ export default function App() {
   const kalshiTargetPrice = kalshiMarket && kalshiMarket.source === 'kalshi' ? kalshiMarket.targetPrice : null;
   const kalshiRefPrice = kalshiTargetPrice ?? kalshiCandleOpen;
   const kalshiRefSource = kalshiTargetPrice != null ? 'kalshi' : 'coinbase';
+  // v13.5: ¿vas GANANDO o PERDIENDO según el BRTI de Kalshi? Se
+  // decide contra el promedio de 60 s (el que liquida) para tu
+  // primera posición real abierta; sin posición real, brtiRef es
+  // null y la UI solo muestra si el BRTI está por encima o por
+  // debajo del objetivo. Función pura (kalshi.js), nunca inventa.
+  const brtiRef = brtiWinning({
+    dir: realDecisions.length ? realDecisions[0].dir : null,
+    targetPrice: kalshiTargetPrice,
+    avg60s: brti && brti.source === 'kalshi' ? brti.avg60s : null,
+    value: brti && brti.source === 'kalshi' ? brti.value : null,
+  });
   const kalshiWinChangePct = (kalshiRefPrice && kalshiPrice) ? ((kalshiPrice - kalshiRefPrice) / kalshiRefPrice) * 100 : null;
   const kalshiAtr = useMemo(() => atr(candles15m), [last15mKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // v13.4: la medida 15m es la de KALSHI (windowOutcome.js): cierre
@@ -573,6 +590,26 @@ export default function App() {
     const t = setInterval(load, 30000);
     return () => { alive = false; clearInterval(t); };
   }, [symbol]);
+
+  // v13.5: valor BRTI en vivo de Kalshi, cada 3 s con la pestaña
+  // Kalshi activa y sesión iniciada. El endpoint solo lee el último
+  // tick que el servidor guarda del WebSocket; si no hay Kalshi
+  // conectado, responde connected:false y NO se abre ninguna
+  // conexión a Kalshi. Si el token caducó, apiAuth lanza y se cae a
+  // Coinbase con aviso (la sesión se limpia en el efecto de /me).
+  useEffect(() => {
+    if (activeTab !== 'kalshi' || symbol !== 'BTC' || !user) { setBrti(null); return; }
+    let alive = true;
+    const load = async () => {
+      try {
+        const b = await apiAuth('/api/kalshi/brti');
+        if (alive) setBrti(b || null);
+      } catch { if (alive) setBrti({ source: 'coinbase', value: null, status: 'error', error: 'No se pudo leer el BRTI del servidor.' }); }
+    };
+    load();
+    const t = setInterval(load, 3000);
+    return () => { alive = false; clearInterval(t); };
+  }, [activeTab, symbol, user]);
 
   // v9: capitalización total y dominio de BTC REALES, de /api/global
   // (CoinGecko). Se refrescan cada 5 min. Si CoinGecko falla o da 429,
@@ -1372,6 +1409,35 @@ export default function App() {
           )}
           {kalshiCandleOpen && kalshiTargetPrice && (
             <p className="muted">Apertura de la ventana según Coinbase: {fmt(kalshiCandleOpen, currency)} (solo orientativo; la liquidación usa el objetivo de Kalshi).</p>
+          )}
+
+          {/* v13.5: VALOR EN VIVO DE KALSHI (BRTI) — el número que
+              liquida la ventana, no Coinbase. El promedio de 60 s es
+              el que decide: si al cerrar está por encima del objetivo
+              gana SÍ, si no gana NO. GANANDO/PERDIENDO se calcula
+              contra ese promedio para tu primera posición real
+              abierta; sin posición real, solo se dice si el BRTI está
+              por encima o por debajo del objetivo. Sin Kalshi
+              conectado o sin dato del WS, se muestra Coinbase con
+              aviso, nunca en blanco y nunca un número inventado. */}
+          {brti == null ? (
+            <p className="muted">Cargando valor en vivo de Kalshi (BRTI)…</p>
+          ) : brti.source === 'kalshi' && brti.value != null ? (
+            <div className="signal" style={{ borderColor: brtiRef && brtiRef.winning ? '#22c55e' : brtiRef && !brtiRef.winning ? '#ef4444' : '#94a3b8' }}>
+              <b style={{ fontSize: 26 }}>Valor actual Kalshi (BRTI): {fmt(brti.value, currency)}</b>
+              <span>Promedio de 60 s (el que liquida): <b>{brti.avg60s != null ? fmt(brti.avg60s, currency) : '— (aún no disponible, se usa el valor en vivo)'}</b>{brti.avg15mFinal != null && (<> · Promedio final de la ventana: <b>{fmt(brti.avg15mFinal, currency)}</b></>)}</span>
+              {kalshiTargetPrice && brtiRef && (
+                <span>Diferencia contra el objetivo {fmt(kalshiTargetPrice, currency)}: <b className={brtiRef.diff >= 0 ? 'up' : 'down'}>{brtiRef.diff >= 0 ? '+' : '−'}{fmt(Math.abs(brtiRef.diff), currency)} ({brtiRef.diffPct >= 0 ? '+' : ''}{brtiRef.diffPct.toFixed(3)}%)</b> · referencia: {brtiRef.refLabel === 'avg60s' ? 'promedio de 60 s' : 'valor en vivo'}</span>
+              )}
+              {realDecisions.length > 0 && brtiRef ? (
+                <span><b style={{ color: brtiRef.winning ? '#22c55e' : '#ef4444' }}>{brtiRef.winning ? '✓ Vas GANANDO según BRTI' : '✗ Vas PERDIENDO según BRTI'}</b> — tu posición {realDecisions[0].ticker} ({realDecisions[0].dir === 'up' ? 'SUBE' : 'BAJA'}) contra el objetivo, por el promedio de 60 s de Kalshi, no por Coinbase.</span>
+              ) : kalshiTargetPrice && brtiRef ? (
+                <span className="muted">El BRTI está {brtiRef.diff >= 0 ? 'por ENCIMA' : 'por DEBAJO'} del objetivo: si apostaste a que SUBE, {brtiRef.diff >= 0 ? 'vas ganando' : 'vas perdiendo'}; si apostaste a que BAJA, al revés.</span>
+              ) : null}
+              <span className="muted">Fuente: índice BRTI en vivo por WebSocket de Kalshi (canal cfbenchmarks_value), con tu clave ya conectada. Actualizado: {brti.updatedAt ? new Date(brti.updatedAt).toLocaleTimeString('es-US', { hour12: false }) : '—'}{brti.stale ? ' · ⚠️ Dato con más de 15 s: puede estar desactualizado.' : ''}</span>
+            </div>
+          ) : (
+            <p className="warn">⚠️ Precio de Coinbase, no de Kalshi (BRTI): {user ? (brti.status === 'error' ? `el WebSocket de Kalshi no está dando el valor (${brti.error || 'sin dato'})` : 'aún no llega el primer tick de Kalshi') : 'entra con tu cuenta y conecta Kalshi para ver el valor en vivo que liquida'} — el precio de arriba es de Coinbase y puede diferir del de liquidación.</p>
           )}
 
           <div className="verdict-main">

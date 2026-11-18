@@ -277,6 +277,18 @@ ofrece un apodo local (sin contraseña, sin servidor).
   local" (sin contraseña, sin servidor), que se usa en la liga semanal
   y en la tarjeta para compartir. Nada se envía a ningún servidor.
 
+## Novedades v13.5: Valor en vivo de Kalshi (BRTI) por WebSocket (17-nov-2026)
+
+Luis lo aprobó: la pestaña Kalshi ya no decide si vas ganando o perdiendo con el precio de Coinbase, sino con el número que de verdad liquida el mercado: el índice **CF Benchmarks BRTI**.
+
+1. **Valor actual Kalshi (BRTI) en vivo** en la pestaña Kalshi, junto al precio objetivo: valor en vivo, promedio de 60 s (el que liquida), diferencia contra el objetivo en $ y %, y **GANANDO / PERDIENDO según BRTI** para tu primera posición real abierta (contra el promedio de 60 s, o el valor en vivo si aún no hay promedio). Sin posición real, muestra si el BRTI está por encima o por debajo del objetivo.
+2. **Cómo llega el valor:** el servidor abre UNA conexión WebSocket a Kalshi por usuario conectado (`wss://external-api-ws.kalshi.com/trade-api/ws/v2`, canal `cfbenchmarks_value`, índice `BRTI`), con la clave del usuario ya conectado (nueva dependencia `ws` en el servidor, solo para poner las cabeceras del handshake — el WebSocket global de Node no las admite). El frontend solo sondea `GET /api/kalshi/brti` (autenticado, JWT) cada 3 s con la pestaña activa y lee el último tick guardado en memoria. Sin Kalshi conectado NO se abre ninguna conexión.
+3. **Correcciones verificadas contra docs.kalshi.com:** **Pyth NO liquida KXBTC15M** (el canal `pyth_value` existe, pero la liquidación es BRTI de CF Benchmarks). El WebSocket de Kalshi **exige autenticación en el handshake** incluso para datos públicos, por eso lo abre el servidor y nunca el navegador. El mensaje `msg.data` viene como STRING JSON (segunda decodificación) y el timestamp del tick es `received_at`.
+4. **Fallback honesto:** si no hay Kalshi conectado, o el WS falla, o aún no llegó el primer tick, la pestaña muestra el precio de Coinbase con el aviso "Precio de Coinbase, no de Kalshi (BRTI)", nunca en blanco y nunca un número inventado. Si el promedio de 60 s no está disponible, lo dice. La conexión se cierra sola tras 5 min sin sondeo (límite de conexiones de Kalshi + Render gratis).
+5. Solo lectura, como siempre: el WS solo se suscribe al índice, no a canales de órdenes ni posiciones, y no hay ninguna llamada de escritura a Kalshi.
+
+Nada de v7–v13.4 se quitó. Mercados y gráfico siguen con Coinbase/Kraken. Pruebas: `tests-v13.5.mjs`.
+
 ## Novedades v13.4: Medición Kalshi real + decisión por precio del contrato (13-nov-2026)
 
 Auditoría del 12-nov-2026 (21:04 Chicago) encontró un fallo metodológico: "Últimas ventanas" y el backtest 15m medían el acierto contra la vela SIGUIENTE, pero Kalshi liquida cada ventana contra su precio objetivo. Además la decisión de cobrar ignoraba el precio del contrato en centavos, y el mismo BTC mostraba dos cambios 24h distintos (ticker vs grid de Mercados). Todo corregido:

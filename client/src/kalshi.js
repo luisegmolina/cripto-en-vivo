@@ -4,8 +4,11 @@
 // con la API Key del usuario, clave cifrada AES-256-GCM en el servidor)
 // y desde v13.2 SÍ muestra los precios oficiales del contrato de
 // Kalshi en centavos (precio SÍ/NO del mercado actual, vía
-// /api/kalshi-market). La app nunca compra, vende ni cierra posiciones:
-// todo lo que hace es leer y sugerir. La "probabilidad estimada" de
+// /api/kalshi-market) y desde v13.5 el valor BRTI EN VIVO por
+// WebSocket del servidor (canal cfbenchmarks_value, vía
+// /api/kalshi/brti): es el número que liquida, no Coinbase. La app
+// nunca compra, vende ni cierra posiciones: todo lo que hace es leer
+// y sugerir. La "probabilidad estimada" de
 // la señal es propia, calculada de la señal (puntuación +
 // confluencia), NO es la probabilidad oficial de Kalshi.
 // Kalshi vende predicciones por ventanas (aquí, 15 minutos): al
@@ -131,6 +134,36 @@ export function cashOutDecision({ dir, entryPrice, currentPrice, amount, signalK
     return { key: 'hold-careful', label: 'AGUANTA CON CUIDADO', title: 'Aguanta con cuidado: la señal sigue a tu favor, pero vas perdiendo', text: 'El precio va en tu contra de momento, pero la señal de 15 minutos sigue en tu dirección. No es momento de cobrar (no hay ganancia), pero pon un límite: si la señal se da la vuelta, sal.', pnl, pnlPct, color: '#f59e0b' };
   }
   return { key: 'wait', label: 'ESPERA', title: 'Espera', text: 'No hay una decisión clara por la señal. Espera a que se defina la ventana.', pnl, pnlPct, color: '#94a3b8' };
+}
+
+// v13.5: valor en vivo de Kalshi (BRTI) por WebSocket del servidor
+// (canal cfbenchmarks_value, índice BRTI). La liquidación usa el
+// PROMEDIO DE 60 SEGUNDOS del BRTI, así que "vas ganando" se decide
+// contra ese promedio cuando lo hay, y contra el valor en vivo si
+// no. Pyth NO liquida KXBTC15M: no se usa aquí. El WS de Kalshi
+// exige autenticación en el handshake, por eso lo abre el servidor
+// con tu clave ya conectada y el navegador solo sondea
+// GET /api/kalshi/brti: tu clave nunca sale del servidor.
+// Regla de liquidación: SÍ gana si el promedio final es MAYOR O
+// IGUAL que el objetivo (por eso >=, no >).
+// Devuelve null si falta el objetivo, la dirección o el precio de
+// referencia. Nunca inventa un resultado.
+export function brtiWinning({ dir, targetPrice, avg60s, value }) {
+  // OJO: Number(null) es 0, así que un promedio ausente NO se puede
+  // convertir con Number() directo: un null se volvería 0 y la
+  // decisión diría PERDIENDO con un precio inventado. Por eso el
+  // helper: null/''/undefined = sin dato.
+  const numOrNull = (v) => (v == null || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
+  const target = numOrNull(targetPrice);
+  const avg = numOrNull(avg60s);
+  const live = numOrNull(value);
+  const ref = avg != null ? avg : live;
+  if (!dir || target == null || target <= 0 || ref == null) return null;
+  const refLabel = avg != null ? 'avg60s' : 'value';
+  const winning = dir === 'up' ? ref >= target : dir === 'down' ? ref < target : null;
+  if (winning == null) return null;
+  const diff = ref - target;
+  return { ref, refLabel, winning, diff, diffPct: (diff / target) * 100 };
 }
 
 // Decisión COBRO / AGUANTO / SALGO para una posición REAL de Kalshi
