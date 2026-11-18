@@ -3,8 +3,11 @@
 //
 // 1. marketRecommendation (kalshi.js, pura): sin posición abierta, la
 //    señal 15m se traduce a "Apuesta a la SUBIDA" / "Apuesta a la BAJADA"
-//    / "ESPERAR". Señal débil o conflictiva -> ESPERAR, nunca inventa
-//    un lado. Sigue siendo sugerencia educativa, nunca orden ni garantía.
+//    / "ESPERAR". v15.4 CAMBIÓ esta regla (ver tests-v15.4.mjs): la señal
+//    débil o conflictiva ya NO veta el lado, se muestra como AVISO junto
+//    al lado; solo sin señal clara se dice ESPERAR. Los checks de abajo
+//    se actualizaron a la regla v15.4 (el veto era el motivo de que Luis
+//    pidiera el cambio dos veces: la caja casi siempre decía ESPERAR).
 // 2. Cableado: App.jsx calcula la recomendación y Decision.jsx la muestra
 //    SOLO en la rama sin posición (§2 sigue diciendo "sin posición
 //    abierta" y no inventa decisión de posición). Con posición abierta
@@ -36,22 +39,22 @@ check('sin posición + señal clara bajista -> Apuesta a la BAJADA',
   (() => { const r = marketRecommendation({ signalKey: 'down', weakSignal: false, conflict: false }); return r.key === 'down' && r.label === 'Apuesta a la BAJADA' && r.side === 'down'; })());
 check('sin posición + señal no clara (wait) -> ESPERAR, sin lado',
   (() => { const r = marketRecommendation({ signalKey: 'wait', weakSignal: false, conflict: false }); return r.key === 'wait' && r.label === 'ESPERAR' && r.side === null; })());
-check('sin posición + señal alcista pero DÉBIL -> ESPERAR (no inventa lado)',
-  (() => { const r = marketRecommendation({ signalKey: 'up', weakSignal: true, conflict: false }); return r.key === 'wait' && r.label === 'ESPERAR' && r.side === null; })());
-check('sin posición + señal bajista pero DÉBIL -> ESPERAR',
-  (() => { const r = marketRecommendation({ signalKey: 'down', weakSignal: true, conflict: false }); return r.key === 'wait' && r.side === null; })());
-check('sin posición + señal alcista pero CONFLICTIVA (otros plazos en contra) -> ESPERAR',
-  (() => { const r = marketRecommendation({ signalKey: 'up', weakSignal: false, conflict: true }); return r.key === 'wait' && r.label === 'ESPERAR' && r.side === null; })());
-check('sin posición + señal bajista pero CONFLICTIVA -> ESPERAR',
-  (() => { const r = marketRecommendation({ signalKey: 'down', weakSignal: false, conflict: true }); return r.key === 'wait' && r.side === null; })());
-check('débil manda sobre el lado aunque no haya conflicto',
-  marketRecommendation({ signalKey: 'up', weakSignal: true, conflict: true }).key === 'wait');
+check('sin posición + señal alcista pero DÉBIL -> SUBIDA con aviso (v15.4: lo débil ya no veta)',
+  (() => { const r = marketRecommendation({ signalKey: 'up', weakSignal: true, conflict: false }); return r.key === 'up' && r.side === 'up' && r.warnings.length === 1; })());
+check('sin posición + señal bajista pero DÉBIL -> BAJADA con aviso (v15.4)',
+  (() => { const r = marketRecommendation({ signalKey: 'down', weakSignal: true, conflict: false }); return r.key === 'down' && r.warnings.length === 1; })());
+check('sin posición + señal alcista pero CONFLICTIVA -> SUBIDA con aviso (v15.4: el conflicto ya no veta)',
+  (() => { const r = marketRecommendation({ signalKey: 'up', weakSignal: false, conflict: true }); return r.key === 'up' && r.warnings.length === 1; })());
+check('sin posición + señal bajista pero CONFLICTIVA -> BAJADA con aviso (v15.4)',
+  (() => { const r = marketRecommendation({ signalKey: 'down', weakSignal: false, conflict: true }); return r.key === 'down' && r.warnings.length === 1; })());
+check('débil + conflicto ya no fuerzan ESPERAR si hay señal clara (v15.4)',
+  marketRecommendation({ signalKey: 'up', weakSignal: true, conflict: true }).key === 'up');
 check('sin flags, los valores por defecto no bloquean (up -> SUBIDA)',
   marketRecommendation({ signalKey: 'up' }).key === 'up');
 
 console.log('v15.3 — cableado: la recomendación solo vive en la rama sin posición');
-check('App.jsx calcula marketRec con la señal, lo débil y el conflicto',
-  app.includes('marketRecommendation({ signalKey: kalshiVerdict.key, weakSignal: kalshiWeakSignal, conflict: marketConflict })'));
+check('App.jsx calcula marketRec con la señal, lo débil, el conflicto y el historial reciente',
+  app.includes('marketRecommendation({ signalKey: kalshiVerdict.key, weakSignal: kalshiWeakSignal, conflict: marketConflict, recent: kalshiRecent })'));
 check('App.jsx calcula el conflicto con los timeframes claros (mayoría en contra)',
   app.includes('marketConflict') && app.includes("mtfClearRows.filter((r) => r.key === marketWantKey)"));
 check('App.jsx pasa marketRec a Decision', app.includes('marketRec={marketRec}'));
@@ -66,8 +69,10 @@ check('Decision.jsx pinta la etiqueta por prop, no hardcodeada en la vista', dec
   const noPosIdx = decision.indexOf('Sin posición abierta en Kalshi ahora mismo: no hay decisión que tomar');
   const noUserIdx = decision.indexOf('Entra y conecta Kalshi para que la app te diga');
   const liveIdx = decision.indexOf('liveDecisionNow ? (');
+  // v15.4: la caja va PRIMERO en cada rama sin posición (antes del texto
+  // explicativo), por eso los usos quedan ANTES de noUserIdx/noPosIdx.
   check('Decision.jsx muestra la recomendación SOLO en las ramas sin posición (sin sesión y sin posición abierta; nunca con posición)',
-    usages.length === 2 && usages[0] > noUserIdx && usages[0] < noPosIdx && usages[1] > noPosIdx && usages[1] < liveIdx);
+    usages.length === 2 && usages[0] < noUserIdx && usages[1] < noPosIdx && usages[1] < liveIdx);
 }
 check('la caja de recomendación lleva fuerza y razones de la señal',
   decision.includes('Fuerza de la señal 15m:') && decision.includes('kalshiReasons'));
@@ -134,7 +139,7 @@ if (bundleMatch) {
 console.log('v15.3 — versión y documentación');
 const versionTxt = readFileSync(path.join(ROOT, 'VERSION.txt'), 'utf8');
 const readme = readFileSync(path.join(ROOT, 'README.md'), 'utf8');
-check('VERSION.txt empieza por v15.3', versionTxt.startsWith('v15.3'));
+check('VERSION.txt documenta v15.3 (la versión actual es v15.4)', versionTxt.includes('v15.3'));
 check('VERSION.txt documenta la recomendación sin posición', versionTxt.includes('Apuesta a la SUBIDA'));
 check('README menciona v15.3 y la recomendación', readme.includes('v15.3') && readme.includes('Apuesta a la SUBIDA'));
 check('README documenta qué se eliminó', readme.includes('qué se eliminó') || readme.includes('Eliminado'));

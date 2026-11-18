@@ -239,30 +239,42 @@ export function liveDecision({ winning, signalKey, signalScore, dir, contractCen
   return { key: 'hold-careful', label: 'AGUANTA CON CUIDADO', color: '#f59e0b', reason: 'Señales mezcladas: el BRTI y la señal de 15 minutos no van en la misma dirección. No hay decisión clara: espera a que se defina y si la señal va en tu contra, sal.' };
 }
 
-// v15.3: RECOMENDACIÓN DEL MERCADO cuando NO hay posición abierta.
+// v15.4: RECOMENDACIÓN DEL MERCADO cuando NO hay posición abierta.
 // Traduce la señal 15m a lenguaje directo: "Apuesta a la SUBIDA" /
 // "Apuesta a la BAJADA" / "ESPERAR". Sigue siendo SOLO una sugerencia
 // educativa (el backtest 15m no se distingue de una moneda): nunca
-// una orden ni una garantía. Si la señal es débil (acierta menos del
-// 50% en las últimas ventanas) o conflictiva (los demás plazos van en
-// contra de la señal 15m), dice ESPERAR y no inventa un lado.
-// La decisión de una posición ABIERTA no pasa por aquí: eso lo decide
-// liveDecision (SAL / AGUANTA / INVIERTE MÁS). Función pura, probada
-// en Node (tests-v15.3.mjs).
-export function marketRecommendation({ signalKey, weakSignal = false, conflict = false }) {
+// una orden ni una garantía.
+//
+// CORRECCIÓN v15.4 (Luis lo pidió dos veces porque la caja casi
+// siempre decía ESPERAR): hasta v15.3, una señal débil (acierto <50%
+// en las últimas 5 ventanas) o conflictiva VETABA el lado y forzaba
+// ESPERAR. Como el backtest 15m ronda el 43-45%, el veto estaba
+// activo casi siempre: con la señal clara en SUBE (puntuación 29)
+// y 1 acierto de 5, la app decía ESPERAR. Ahora la señal clara
+// MANDA: si hay lado claro (SUBE/BAJA), se muestra el lado, y lo
+// débil / lo conflictivo se muestra como AVISO junto al lado, no
+// como veto. Solo se dice ESPERAR cuando la señal misma no es
+// clara (puntuación entre -25 y +25, sin dirección). La decisión
+// de una posición ABIERTA no pasa por aquí: eso lo decide
+// liveDecision (SAL / AGUANTA / INVIERTE MÁS). Función pura,
+// probada en Node (tests-v15.4.mjs).
+export function marketRecommendation({ signalKey, weakSignal = false, conflict = false, recent = null }) {
+  const warnings = [];
   if (weakSignal) {
-    return { key: 'wait', label: 'ESPERAR', side: null, reason: 'La señal 15m está débil: en las últimas ventanas con señal clara acertó menos de la mitad. No hay lado claro en el que apostar.' };
+    warnings.push(recent
+      ? `Señal débil: en las últimas ${recent.total} ventanas con señal clara solo acertó ${recent.wins} de ${recent.total}. El lado que se muestra es el de la señal de ahora, pero el historial reciente es flojo.`
+      : 'Señal débil: en las últimas ventanas con señal clara acertó menos de la mitad. El lado que se muestra es el de la señal de ahora, pero el historial reciente es flojo.');
   }
   if (conflict) {
-    return { key: 'wait', label: 'ESPERAR', side: null, reason: 'La señal 15m y los demás plazos no se ponen de acuerdo: unos dicen SUBE y otros BAJA. Sin lado claro, esperar.' };
+    warnings.push('Los demás plazos no se ponen de acuerdo con la señal 15m: unos dicen SUBE y otros BAJA. El lado que se muestra es el de la señal 15m, pero no hay consenso.');
   }
   if (signalKey === 'up') {
-    return { key: 'up', label: 'Apuesta a la SUBIDA', side: 'up', reason: 'La señal 15m dice SUBE con claridad: el mercado apunta a que BTC termina la ventana por encima del objetivo.' };
+    return { key: 'up', label: 'Apuesta a la SUBIDA', side: 'up', warnings, reason: 'La señal 15m dice SUBE con claridad: el mercado apunta a que BTC termina la ventana por encima del objetivo.' };
   }
   if (signalKey === 'down') {
-    return { key: 'down', label: 'Apuesta a la BAJADA', side: 'down', reason: 'La señal 15m dice BAJA con claridad: el mercado apunta a que BTC termina la ventana por debajo del objetivo.' };
+    return { key: 'down', label: 'Apuesta a la BAJADA', side: 'down', warnings, reason: 'La señal 15m dice BAJA con claridad: el mercado apunta a que BTC termina la ventana por debajo del objetivo.' };
   }
-  return { key: 'wait', label: 'ESPERAR', side: null, reason: 'La señal 15m no es clara en esta ventana: ni SUBE ni BAJA con fuerza. Esperar a que se defina o a la próxima ventana.' };
+  return { key: 'wait', label: 'ESPERAR', side: null, warnings, reason: 'La señal 15m no es clara en esta ventana: ni SUBE ni BAJA con fuerza. Esperar a que se defina o a la próxima ventana.' };
 }
 
 // Decisión COBRO / AGUANTO / SALGO para una posición REAL de Kalshi

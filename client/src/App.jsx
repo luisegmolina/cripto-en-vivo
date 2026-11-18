@@ -385,7 +385,7 @@ export default function App() {
   const mtfClearRows = (mtfVerdict.rows || []).filter((r) => r.key === 'buy' || r.key === 'sell');
   const marketConflict = Boolean(marketWantKey && mtfClearRows.length > 0
     && mtfClearRows.filter((r) => r.key === marketWantKey).length / mtfClearRows.length < 0.5);
-  const marketRec = marketRecommendation({ signalKey: kalshiVerdict.key, weakSignal: kalshiWeakSignal, conflict: marketConflict });
+  const marketRec = marketRecommendation({ signalKey: kalshiVerdict.key, weakSignal: kalshiWeakSignal, conflict: marketConflict, recent: kalshiRecent });
   const kalshiProbAdj = adjustProbForRecent(kalshiProb, kalshiHist);
   const kalshiEntryNum = Number(kalshiEntryPrice);
   const kalshiAmountNum = Number(kalshiAmount);

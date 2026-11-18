@@ -277,6 +277,16 @@ ofrece un apodo local (sin contraseña, sin servidor).
   local" (sin contraseña, sin servidor), que se usa en la liga semanal
   y en la tarjeta para compartir. Nada se envía a ningún servidor.
 
+## Novedades v15.4: la recomendación sin posición ahora sí dice a qué apostar (18-nov-2026)
+
+Luis repitió el pedido porque la caja de v15.3 casi siempre decía ESPERAR. Reproducido con datos en vivo (velas reales de Coinbase): la señal 15m estaba clara en SUBE (puntuación 29) y aun así la caja decía ESPERAR.
+
+**Causa (el veto):** `marketRecommendation` vetaba el lado cuando la señal era débil (acierto <50% en las últimas 5 ventanas con señal clara) o conflictiva (los demás plazos en contra) y forzaba ESPERAR. Como el backtest 15m ronda el 43-45%, el veto estaba activo casi siempre: en el momento de la comprobación, las últimas 5 ventanas con señal habían acertado solo 1 de 5 (20%), así que una señal SUBE clara se convertía en ESPERAR.
+
+**Corrección:** la señal clara MANDA. Sin posición abierta, §2 muestra siempre, primero y en grande, **"A qué apostar en esta ventana: Apuesta a la SUBIDA"** o **"Apuesta a la BAJADA"**, con fuerza y razones. Lo débil y lo conflictivo ya no vetan: se muestran como AVISOS junto al lado (ej.: "⚠️ Señal débil: en las últimas 5 ventanas con señal clara solo acertó 1 de 5"). Solo se dice ESPERAR cuando la señal misma no es clara (puntuación entre −25 y +25). Con posición abierta la caja no aparece: manda SAL/AGUANTA/INVIERTE MÁS. Sigue siendo sugerencia educativa, nunca orden ni garantía; el aviso del backtest 15m (45%, no se distingue de una moneda) sigue en §4 y en la caja.
+
+**Verificación:** `tests-v15.4.mjs` nuevo (23 tests, incluido el caso real SUBE 29 + 1/5); `tests-v15.3.mjs` actualizado a la regla v15.4 (los checks del veto viejo cambiaban por diseño); suites viejas sin regresiones (ver VERSION.txt).
+
 ## Novedades v15.3.1: corrección de la pantalla en blanco de v15.3 (18-nov-2026, URGENTE)
 
 Luis reportó a las 23:53 CST que la web se quedaba en blanco y no cargaba. Reproducido en navegador real (Chromium headless, bundle de producción servido): `#root` vacío y consola `ReferenceError: priceAlerts is not defined`.
