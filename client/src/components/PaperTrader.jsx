@@ -1,4 +1,4 @@
-// PaperTrader.jsx — v16.10: §6 Trader continuo en papel (sin dinero real).
+// PaperTrader.jsx — v17: §6 Trader continuo en papel (sin dinero real).
 // Solo LEE el estado del trader del servidor (GET /api/kalshi/paper-trader
 // cada 2 s) y pide Iniciar/Detener. Nunca envía órdenes a Kalshi ni toca
 // dinero real: entra y sale EN PAPEL con el modelo de probabilidad
@@ -7,9 +7,11 @@
 // ventana). v16.10 QUITÓ la salida por lock roto: el trader evalúa
 // entrada y salida a cualquier R de la ventana (antes solo en el
 // último minuto), y cada evaluación queda en el anillo `evaluaciones`
-// del snapshot (entradas y rechazos con su motivo). El trader EN VIVO
-// no tiene salida: liveTrader.js NO se tocó en esta versión y sigue
-// sin vender antes de la liquidación.
+// del snapshot (entradas y rechazos con su motivo). v17 QUITA el tope
+// de 5 entradas/día y PERMITE re-entrar en la misma ventana tras una
+// salida si el EV lo justifica (1 posición abierta a la vez, como
+// siempre). El trader EN VIVO no tiene salida: liveTrader.js NO se
+// tocó en esta versión y sigue sin vender antes de la liquidación.
 // Avisos honestos: solo corre mientras el servidor está despierto
 // (Render gratis duerme tras 15 min sin tráfico y el WS BRTI se
 // cierra a los 5 min sin sondeo), y el backtest del motor sigue en
@@ -54,10 +56,11 @@ const MOTIVOS = {
 
 // Motivos del anillo `evaluaciones` del snapshot (v16.10): 'entrada'
 // cuando entró; si no, el motivo del rechazo según el servidor.
+// v17: 'max_entradas_dia' y 'sin_reentrada' YA NO EXISTEN (sin tope
+// diario y con re-entrada permitida tras una salida).
 const MOTIVOS_EVAL = {
   entrada: 'Entrada',
   sin_quote_fresca: 'Sin quote fresca',
-  max_entradas_dia: 'Máx. 5 entradas/día',
   sin_ev_valido: 'Sin EV válido',
   ev_bajo: 'EV bajo (≤ $0.015)',
   max_notional: 'Notional > $5',
@@ -65,7 +68,6 @@ const MOTIVOS_EVAL = {
   sin_tick_brti: 'Sin tick BRTI',
   tick_desactualizado: 'Tick BRTI desactualizado',
   sin_tiempo: 'Sin tiempo restante',
-  sin_reentrada: 'Sin re-entrada en la ventana',
 };
 
 // Comisión taker de Kalshi por contrato: 0.07 × precio × (1 − precio).
@@ -183,8 +185,8 @@ export default function PaperTrader({ user, fmt }) {
           <b>{data?.twapActual != null ? fmt(data.twapActual, 'USD') : '—'}{data?.sigmaActual != null ? ` · σ $${fmtNum(data.sigmaActual)}` : ''}</b>
         </div>
         <div>
-          <span>Entradas hoy (máx. 5)</span>
-          <b>{data?.entradasHoy ?? 0} / 5</b>
+          <span>Entradas hoy</span>
+          <b>{data?.entradasHoy ?? 0}</b>
         </div>
         <div>
           <span>Ask SÍ / NO (Kalshi)</span>
@@ -217,7 +219,7 @@ export default function PaperTrader({ user, fmt }) {
           </span>
         </div>
       ) : (
-        <p className="muted">Sin posición abierta en papel. El trader entra solo cuando el EV por contrato supera $0.015 (con quote fresca, σ disponible y menos de 5 entradas hoy), por el lado de mayor EV, en cualquier momento de la ventana — no solo al final.</p>
+        <p className="muted">Sin posición abierta en papel. El trader entra solo cuando el EV por contrato supera $0.015 (con quote fresca y σ disponible), por el lado de mayor EV, en cualquier momento de la ventana — no solo al final. Tras una salida puede volver a entrar en la misma ventana si el EV lo justifica (v17, sin tope de entradas al día).</p>
       )}
 
       <div className="row" style={{ marginTop: '10px' }}>

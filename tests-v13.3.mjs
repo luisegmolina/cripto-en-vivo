@@ -74,7 +74,7 @@ ok('sin segundo aviso de liquidación BRTI en KalshiConnect (v15: el comentario 
 
 // 6. Versión.
 console.log('— versión —');
-ok('VERSION.txt empieza por v16', versionTxt.startsWith('v16'));
-ok('VERSION_LABEL v16 en App.jsx', appSrc.includes("VERSION_LABEL = 'v16"));
+ok('VERSION.txt empieza por v17', versionTxt.startsWith('v17'));
+ok('VERSION_LABEL v17 en App.jsx', appSrc.includes("VERSION_LABEL = 'v17"));
 
 console.log(`\ntests-v13.3: ${pass} pasaron`);

@@ -25,7 +25,7 @@ import { siteGateStatus, onSiteGateLocked, emitSiteGateLocked } from './siteGate
 
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v16.10 — Evaluar toda la ventana, sin salida por lock roto';
+const VERSION_LABEL = 'v17 — Papel sin límites, sombra libre';
 
 function visibleInterval(fn, ms) {
   const t = setInterval(() => { if (!document.hidden) fn(); }, ms);

@@ -1,4 +1,4 @@
-// traderEval.js — v16.10: EVALUACIÓN PURA DEL TRADER (sin red, sin estado).
+// traderEval.js — v17: EVALUACIÓN PURA DEL TRADER (sin red, sin estado).
 //
 // Extraído de paperTrader.js (v16.6) sin cambiar una sola fórmula:
 // las constantes de límites y las funciones puras del modelo de
@@ -6,6 +6,15 @@
 // sigma del anillo, EV por contrato, decisión de entrada/salida,
 // holdPnl, stats y dayKey) viven aquí para que paperTrader.js y
 // liveTrader.js las compartan sin duplicarlas.
+//
+// v17 (decisión de Luis, 18-nov): PAPEL SIN LÍMITES. Se QUITA el
+// tope de 5 entradas/día: MAX_ENTRADAS_DIA ya no existe y
+// evaluarEntrada ya no recibe entradasHoy/maxEntradasDia ni
+// rechaza con 'max_entradas_dia'. El contador entradasHoy SIGUE
+// existiendo (paperTrader lo incrementa y lo muestra en §6), pero
+// ya no limita nada. Se mantienen: EV×qty > $0.015, 1 contrato,
+// notional ≤ $5, y las salidas solo por ganancia, stop y fin de
+// ventana.
 //
 // v16.10 — La regla (a) de salida (lock roto) se ELIMINÓ por
 // decisión de Luis (18-nov 22:36): el salto ya no vende nunca. La
@@ -28,8 +37,9 @@ const {
 } = require('./paperAuditor');
 
 // --- Límites (los del experimento live acotado, v16.4) ---
+// v17: SIN tope de entradas/día en papel (MAX_ENTRADAS_DIA
+// eliminado; el contador entradasHoy sigue solo como estadística).
 const QTY_POR_ORDEN = 1;
-const MAX_ENTRADAS_DIA = 5;
 const MAX_NOTIONAL_USD = 5;
 const MIN_EV_USD = MIN_NET_EDGE_DOLLARS; // $0.015 por orden
 const MIN_MUESTRAS_SIGMA = 10;
@@ -142,10 +152,11 @@ function valorNetoSalida(precio) {
 
 // Decisión pura de entrada. Devuelve { entrar, motivo, lado, ask,
 // fee, ev, p }. `quoteFresca` la calcula el llamador (≤5 s).
-function evaluarEntrada({ pYes, pNo, quote, quoteFresca = true, entradasHoy = 0, maxEntradasDia = MAX_ENTRADAS_DIA, minEvUsd = MIN_EV_USD, qty = QTY_POR_ORDEN, maxNotionalUsd = MAX_NOTIONAL_USD } = {}) {
+// v17: SIN tope de entradas/día — no hay parámetro entradasHoy ni
+// maxEntradasDia y nunca se rechaza con 'max_entradas_dia'.
+function evaluarEntrada({ pYes, pNo, quote, quoteFresca = true, minEvUsd = MIN_EV_USD, qty = QTY_POR_ORDEN, maxNotionalUsd = MAX_NOTIONAL_USD } = {}) {
   const base = { entrar: false, motivo: null, lado: null, ask: null, fee: null, ev: null, p: null };
   if (!quoteFresca || !quote) return { ...base, motivo: 'sin_quote_fresca' };
-  if (entradasHoy >= maxEntradasDia) return { ...base, motivo: 'max_entradas_dia' };
   const candidatos = [
     { lado: 'yes', p: pYes, ask: quote.yesAskDollars },
     { lado: 'no', p: pNo, ask: quote.noAskDollars },
@@ -233,7 +244,7 @@ function dayKey(date = new Date()) {
 }
 
 module.exports = {
-  QTY_POR_ORDEN, MAX_ENTRADAS_DIA, MAX_NOTIONAL_USD, MIN_EV_USD,
+  QTY_POR_ORDEN, MAX_NOTIONAL_USD, MIN_EV_USD,
   MIN_MUESTRAS_SIGMA, SIGMA_MIN_USD, ANILLO_MAX,
   GANANCIA_MIN_USD, STOP_FRACCION_COSTO, R_FIN_VENTANA,
   QUOTE_FRESCA_MS, QUOTE_THROTTLE_MS, MAX_TRADES, MAX_TRADES_SNAPSHOT,

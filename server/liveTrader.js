@@ -1,4 +1,17 @@
-// liveTrader.js — v16.2: BOT EN VIVO, APAGADO POR DEFECTO.
+// liveTrader.js — v17: BOT EN VIVO, APAGADO POR DEFECTO.
+//
+// v17 (decisión de Luis, 18-nov): SOMBRA LIBRE. (1) Nuevo control
+// para quitar el kill: `unkill(userId)` (ruta POST
+// /kalshi/live/unkill, solo auth JWT, SIN exigir la env) limpia
+// killed/killReason/killedAt, NO toca armed y persiste. Antes la
+// única vía que limpiaba killed era arm(), y POST /kalshi/live/enable
+// devuelve 403 con live apagado: con live en false el kill era una
+// puerta de un solo sentido. (2) Dedup POR ENTRADA en el espejo
+// vivo: ensureTraderObserver clavea `procesando` por entrada.id
+// (si hay) y handleViableSignal deduce por entradaId cuando está
+// presente (sin id, mantiene el dedup por ticker de siempre).
+// NO cambian verificarLimitesTrader ni evaluarDecision. NO hay
+// salidas en vivo: sigue sin funciones de vender/cerrar.
 //
 // El código de órdenes reales EXISTE, pero es IMPOSIBLE enviar una
 // orden por accidente con la configuración actual:
@@ -12,6 +25,9 @@
 //      además devuelve 403 mientras la env no sea 'true'.
 //   3. Kill switch por usuario (POST /kalshi/live/kill, siempre
 //      disponible): detiene todo inmediatamente y es persistente.
+//      Se levanta con POST /kalshi/live/unkill (v17, siempre
+//      disponible, sin exigir la env) o con POST /kalshi/live/enable
+//      (que además exige la env en 'true').
 //   4. Límites duros (ver abajo): al alcanzarlos, auto-detiene.
 //
 // QUÉ MATERIAL HACE FALTA PARA FIRMAR: NINGUNO NUEVO. El servidor ya
@@ -611,14 +627,30 @@ async function persistir(userId) {
 }
 
 // Kill switch: detiene todo inmediatamente y desarma. Persistente
-// (no se levanta solo: solo POST /kalshi/live/enable, con la env en
-// 'true' y decisión explícita del usuario).
+// (no se levanta solo: solo POST /kalshi/live/unkill (v17) o POST
+// /kalshi/live/enable, con la env en 'true' y decisión explícita
+// del usuario).
 async function kill(userId, reason = 'manual') {
   const est = await cargarEstadoSiHaceFalta(userId);
   est.killed = true;
   est.killReason = String(reason || 'manual');
   est.killedAt = new Date().toISOString();
   est.armed = false;
+  await persistir(userId);
+  return getSnapshot(userId);
+}
+
+// v17 — Quitar el kill SIN armar: limpia killed/killReason/killedAt
+// y NO toca armed (si estaba desarmado, sigue desarmado; armar
+// sigue exigiendo live encendido vía POST /kalshi/live/enable).
+// Es el control que levanta la detención que puso Luis: con live
+// apagado el espejo vuelve a registrar HABRÍA ENVIADO, sin ninguna
+// orden real. Persiste y devuelve el snapshot.
+async function unkill(userId) {
+  const est = await cargarEstadoSiHaceFalta(userId);
+  est.killed = false;
+  est.killReason = null;
+  est.killedAt = null;
   await persistir(userId);
   return getSnapshot(userId);
 }
@@ -737,22 +769,39 @@ async function handleTraderEntry(userId, entrada, deps = {}) {
     fuente: 'trader',
     evEstimada: entrada.ev,
     pEstimada: entrada.p,
+    // v17 — id único de la entrada en papel (paperTrader lo pone en
+    // ultimaEntrada): el dedup del vivo es POR ENTRADA, no por
+    // ticker. Sin id (entradas viejas), dedup por ticker como antes.
+    entradaId: entrada.id != null ? entrada.id : null,
   };
   return handleViableSignal(userId, simulacion, deps);
 }
 
 // Procesa UNA señal viable del auditor. Es el único camino hacia un
-// envío real. Dedup por ticker: una ventana se procesa una sola vez.
-// `deps` permite inyectar stubs en pruebas: { credsProvider, sendFn }.
+// envío real. Dedup: v17 POR ENTRADA cuando la señal trae entradaId
+// (entradas del trader: dos entradas distintas del mismo ticker se
+// procesan las dos; la misma entrada dos veces es 'duplicate');
+// sin entradaId, el dedup por ticker de siempre (una ventana se
+// procesa una sola vez). `deps` permite inyectar stubs en pruebas:
+// { credsProvider, sendFn }.
 async function handleViableSignal(userId, simulacion, deps = {}) {
   const est = await cargarEstadoSiHaceFalta(userId);
   resetDiaSiCambio(est);
   const ticker = simulacion && simulacion.ticker;
   if (!ticker) return { action: 'ignore', reason: 'no_ticker' };
-  if (est.lastProcessedTicker === ticker) return { action: 'duplicate', reason: 'already_processed', ticker };
-  if (est.log.some((e) => e.ticker === ticker && e.action !== 'duplicate')) {
-    est.lastProcessedTicker = ticker;
-    return { action: 'duplicate', reason: 'already_processed', ticker };
+  const entradaId = simulacion && simulacion.entradaId != null ? simulacion.entradaId : null;
+  if (entradaId != null) {
+    // Dedup por entrada: solo duplica si YA hay una entrada en el
+    // log con este mismo entradaId (y acción distinta de 'duplicate').
+    if (est.log.some((e) => e.entradaId != null && e.entradaId === entradaId && e.action !== 'duplicate')) {
+      return { action: 'duplicate', reason: 'already_processed', ticker };
+    }
+  } else {
+    if (est.lastProcessedTicker === ticker) return { action: 'duplicate', reason: 'already_processed', ticker };
+    if (est.log.some((e) => e.ticker === ticker && e.action !== 'duplicate')) {
+      est.lastProcessedTicker = ticker;
+      return { action: 'duplicate', reason: 'already_processed', ticker };
+    }
   }
   const decision = evaluarDecision({ liveEnabled: isLiveEnabled(), estado: est, senal: simulacion });
   const qty = Number(simulacion.ordenV2Preview && simulacion.ordenV2Preview.payload
@@ -772,6 +821,9 @@ async function handleViableSignal(userId, simulacion, deps = {}) {
     fuente: simulacion.fuente || 'auditor',
     evEstimada: simulacion.evEstimada != null ? simulacion.evEstimada : null,
     pEstimada: simulacion.pEstimada != null ? simulacion.pEstimada : null,
+    // v17 — id de la entrada del trader que originó esta decisión
+    // (null para señales del auditor): el dedup es por entrada.
+    entradaId: entradaId,
     orderId: null,
     clientOrderId: null,
     fillStatus: null,
@@ -976,10 +1028,10 @@ function ensureObservador() {
 // v16.9 — OBSERVADOR DEL TRADER: el único feed de entradas en vivo.
 // Un setInterval global de 1 s (perezoso, con unref, mismo patrón
 // que ensureObservador) que recorre los traders en papel habilitados
-// y espeja cada `ultimaEntrada` UNA sola vez por ticker (dedup en
-// `procesando` + el dedup por ticker de handleViableSignal). Se apaga
-// solo cuando ya no queda ningún trader activo. NO modifica
-// paperTrader.js: solo lee sus snapshots.
+// y espeja cada `ultimaEntrada` UNA sola vez por ENTRADA (v17: dedup
+// en `procesando` por entrada.id; sin id, por ticker) + el dedup de
+// handleViableSignal. Se apaga solo cuando ya no queda ningún trader
+// activo. NO modifica paperTrader.js: solo lee sus snapshots.
 let observadorTraderInterval = null;
 
 function ensureTraderObserver() {
@@ -993,7 +1045,10 @@ function ensureTraderObserver() {
       const snap = paperTrader.getSnapshot(userId);
       const entrada = snap && snap.ultimaEntrada;
       if (!entrada || !entrada.ticker) continue;
-      const clave = `${userId}:${entrada.ticker}`;
+      // v17 — clave POR ENTRADA: dos entradas distintas del mismo
+      // ticker (re-entrada en papel) se espejan las dos; la misma
+      // entrada dos veces sigue siendo una sola.
+      const clave = entrada.id != null ? `${userId}:${entrada.id}` : `${userId}:${entrada.ticker}`;
       if (procesando.has(clave)) continue;
       procesando.add(clave);
       handleTraderEntry(userId, entrada, { ahoraMs: Date.now() }).catch(() => {}).finally(() => procesando.delete(clave));
@@ -1012,7 +1067,7 @@ module.exports = {
   crearConfigExperimento, limitesEfectivos, esErrorTimeout, setExperiment,
   consultarOrdenKalshi, conciliarOrdenEnviada, calcularResultadoRealizado, registrarLiquidacion,
   setPersistencia, setCredentialsProvider, setCargarEstado, setSendFn, setBalanceProvider,
-  cargarEstadoSiHaceFalta, getSnapshot, kill, arm, handleViableSignal,
+  cargarEstadoSiHaceFalta, getSnapshot, kill, unkill, arm, handleViableSignal,
   handleTraderEntry, ensureTraderObserver, verificarLimitesTrader,
   ensureObservador,
   // Solo para pruebas: inspeccionar el estado en memoria.

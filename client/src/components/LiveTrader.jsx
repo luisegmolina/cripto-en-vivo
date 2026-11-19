@@ -1,6 +1,6 @@
-// LiveTrader.jsx — v16.9: §7 Bot en vivo — APAGADO por defecto.
+// LiveTrader.jsx — v17: §7 Bot en vivo — APAGADO por defecto.
 // Solo LEE el estado del bot (GET /api/kalshi/live/status cada 2 s)
-// y pide Detener (kill switch). NUNCA envía órdenes desde el cliente:
+// y pide Detener (kill switch) o Quitar kill. NUNCA envía órdenes desde el cliente:
 // las órdenes solo salen del servidor (liveTrader) al evaluar una
 // entrada del trader por EV, y solo si el interruptor global
 // LIVE_TRADING_ENABLED='true' está puesto en el servidor (hoy NO lo
@@ -10,6 +10,10 @@
 // el servidor devuelve 403 si se intenta igual.
 // v16.9: el vivo ya NO opera sobre señales del auditor francotirador:
 // el auditor sigue midiendo en papel (§6) pero ya no alimenta al vivo.
+// v17: botón "Quitar kill" (POST /api/kalshi/live/unkill) que levanta
+// la detención SIN armar: con live apagado el espejo vuelve a registrar
+// HABRÍA ENVIADO; armar sigue exigiendo live encendido. Dedup del
+// espejo POR ENTRADA (dos entradas del mismo ticker se espejan las dos).
 import { useEffect, useState } from 'react';
 import { apiAuth } from '../auth.js';
 
@@ -129,6 +133,7 @@ export default function LiveTrader({ user, fmt }) {
       <div className="row" style={{ marginTop: '10px' }}>
         <button className="primary" disabled={busy || !user || !live || armed} onClick={() => accion('/api/kalshi/live/enable', 'Bot armado. Solo operará sobre entradas del trader por EV, dentro de los límites.')}>▶ Armar bot en vivo</button>
         <button disabled={busy || !user || killed} onClick={() => accion('/api/kalshi/live/kill', 'Kill switch activado: el bot está detenido y desarmado.')}>■ Detener (kill switch)</button>
+        <button disabled={busy || !user || !killed} onClick={() => accion('/api/kalshi/live/unkill', 'Kill switch levantado: el espejo vuelve a registrar HABRÍA ENVIADO (sin órdenes reales mientras el interruptor global esté apagado). El bot sigue desarmado.')} >↺ Quitar kill</button>
       </div>
       {!live && user && (
         <p className="warn">⚠️ El botón Armar está deshabilitado porque el interruptor global del servidor está APAGADO (LIVE_TRADING_ENABLED no es 'true'). Encenderlo exige cambiar la variable en el servidor Y tu decisión explícita: no se enciende solo desde la web.</p>
@@ -183,9 +188,11 @@ export default function LiveTrader({ user, fmt }) {
         </p>
       ) : killed ? (
         <p className="warn">
-          ⚠️ Bot DETENIDO por el kill switch: no envía órdenes reales ni se puede armar hasta que
-          se levante la detención. El trader en papel (§6) sigue midiendo si la estrategia tiene ventaja.
-          El backtest honesto del motor sigue en ~46%: todavía no hay edge demostrado.
+          ⚠️ Bot DETENIDO por el kill switch: no envía órdenes reales. La detención se levanta
+          con el botón "Quitar kill" (el espejo vuelve a registrar HABRÍA ENVIADO); armar sigue
+          exigiendo el interruptor global encendido. El trader en papel (§6) sigue midiendo si
+          la estrategia tiene ventaja. El backtest honesto del motor sigue en ~46%: todavía no
+          hay edge demostrado.
         </p>
       ) : live ? (
         <p className="warn">

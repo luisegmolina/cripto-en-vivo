@@ -594,7 +594,10 @@ router.post('/kalshi/paper-trader/stop', auth, async (req, res) => {
 // del trader continuo, no por el auditor). LIVE_TRADING_ENABLED='true' en el servidor es el
 // interruptor global; sin ella, enable devuelve 403 y todo queda en
 // would-send. El kill switch (POST /kalshi/live/kill) está siempre
-// disponible y es persistente.
+// disponible y es persistente; v17 agrega POST /kalshi/live/unkill
+// (también siempre disponible, solo auth JWT, SIN exigir la env)
+// para levantar la detención sin armar: antes la única vía que
+// limpiaba killed era arm(), y enable devuelve 403 con live apagado.
 router.get('/kalshi/live/status', auth, async (req, res) => {
   await liveTrader.cargarEstadoSiHaceFalta(req.user.id);
   const snap = liveTrader.getSnapshot(req.user.id);
@@ -604,6 +607,16 @@ router.get('/kalshi/live/status', auth, async (req, res) => {
 
 router.post('/kalshi/live/kill', auth, async (req, res) => {
   const snap = await liveTrader.kill(req.user.id, 'manual');
+  const conn = await db.getKalshiConnection(req.user.id);
+  res.json({ ok: true, ...snap, kalshiConnected: !!conn });
+});
+
+// v17 — Quitar el kill SIN armar (solo auth JWT, SIN exigir la env):
+// limpia killed/killReason/killedAt y NO toca armed. Con live
+// apagado el espejo vuelve a registrar HABRÍA ENVIADO; armar sigue
+// exigiendo live encendido (POST /kalshi/live/enable).
+router.post('/kalshi/live/unkill', auth, async (req, res) => {
+  const snap = await liveTrader.unkill(req.user.id);
   const conn = await db.getKalshiConnection(req.user.id);
   res.json({ ok: true, ...snap, kalshiConnected: !!conn });
 });

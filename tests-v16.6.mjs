@@ -39,7 +39,13 @@ const sha256 = (p) => createHash('sha256').update(readFileSync(path.join(ROOT, p
 // francotirador ya no alimenta al vivo). Hash nuevo verificado contra
 // el contenido real (sin salidas en vivo, sin handleViableSignal en
 // ensureObservador). paperAuditor.js sigue en su baseline original.
-const HASH_LIVE_TRADER = '893ffb4a332e2f3910e4d8d28f5bc0ad759a4311dffe9eb05f4cc8013f103e8b';
+// v17 — RE-BASELINE del coordinador: liveTrader.js cambió POR
+// DISEÑO en v17 (unkill + ruta /kalshi/live/unkill + dedup por
+// entradaId en handleViableSignal y ensureTraderObserver). Hash
+// nuevo 3314ec54… verificado con sha256sum; sin salidas en vivo
+// (tests-v17.mjs lo verifica) y sin cambios en verificarLimitesTrader
+// ni evaluarDecision.
+const HASH_LIVE_TRADER = '3314ec54ec628c3291e6fa20ca3a98a983a922c8539d02150dea0c3f3928ef92';
 const HASH_PAPER_AUDITOR = '7bd6af9aec741b4f7e1695839f4edf77027ad40c8897210d5f4b48101452263d';
 // v16.10 — RE-BASELINE del hash del motor del cliente (kalshi.js):
 // el baseline 7eb7beef… era anterior a v16.8 y fallaba desde entonces
@@ -160,8 +166,8 @@ console.log('v16.6 — 2. Entrada: solo con EV > umbral');
   check('evaluarEntrada sin quote fresca rechaza con sin_quote_fresca',
     sinQuote.entrar === false && sinQuote.motivo === 'sin_quote_fresca');
   const tope = pt.evaluarEntrada({ pYes: 0.99, pNo: 0.01, quote: q, entradasHoy: 5 });
-  check('evaluarEntrada con 5 entradas hoy rechaza con max_entradas_dia',
-    tope.entrar === false && tope.motivo === 'max_entradas_dia');
+  check('v17: evaluarEntrada con 5 entradas hoy ENTRA (sin tope diario; el parámetro entradasHoy se ignora)',
+    tope.entrar === true && tope.lado === 'yes');
   const notional = pt.evaluarEntrada({ pYes: 0.99, pNo: 0.01, quote: q, entradasHoy: 0, maxNotionalUsd: 0.5 });
   check('evaluarEntrada con tope de notional $0.50 y ask $0.90 rechaza con max_notional',
     notional.entrar === false && notional.motivo === 'max_notional');
@@ -273,8 +279,8 @@ check('liveTrader.js intacto (sha256 del baseline)',
   sha256('server/liveTrader.js') === HASH_LIVE_TRADER);
 check('motor del cliente intacto (kalshi.js, analysis.js, verdict.js, windowOutcome.js)',
   Object.entries(HASH_MOTOR).every(([p, h]) => sha256(p) === h));
-check('VERSION.txt está en v16.10 (el trabajo del cliente actualiza la versión)',
-  src('VERSION.txt').startsWith('v16.10'));
+check('VERSION.txt está en v17 (el trabajo del cliente actualiza la versión)',
+  src('VERSION.txt').startsWith('v17'));
 check('routes.js cablea GET/POST /kalshi/paper-trader y el hook cev_paper_trades',
   routesSrc.includes("'/kalshi/paper-trader'") && routesSrc.includes('paperTrader.getSnapshot')
   && routesSrc.includes('paperTrader.startTrader') && routesSrc.includes('paperTrader.stopTrader')
@@ -358,7 +364,8 @@ console.log('v16.6 — 8. Tick real: ventana completa en papel (entrada → stop
 
   // 8a. Entrada por EV, salida por stop-loss (v16.10: la salida por
   // lock roto ya no existe; con el neto en 0.2853, por debajo del 50%
-  // del costo, manda el stop), sin re-entrada, y el P&L con salida
+  // del costo, manda el stop), v17: no re-entra porque el EV queda
+  // bajo tras la caída (ev_bajo), no por regla — y el P&L con salida
   // difiere del de mantener hasta liquidación.
   {
     const u = 999601;
@@ -421,9 +428,11 @@ console.log('v16.6 — 8. Tick real: ventana completa en papel (entrada → stop
       snap = await tickTrader(u, relojMs, deps);
       await sleep(5);
     }
-    check('tick: tras la caída sale por stop_loss (sin lock roto en v16.10) y no re-entra',
+    check('tick: tras la caída sale por stop_loss (sin lock roto en v16.10); v17: NO re-entra porque el EV es bajo (ev_bajo), no por regla — no hay sin_reentrada',
       snap.posicionAbierta === null && snap.trades.length === 1
-      && snap.trades[0].motivoSalida === 'stop_loss' && snap.entradasHoy === 1,
+      && snap.trades[0].motivoSalida === 'stop_loss' && snap.entradasHoy === 1
+      && snap.evaluaciones.slice(0, 8).every((e) => e.motivo === 'ev_bajo')
+      && !snap.evaluaciones.some((e) => e.motivo === 'sin_reentrada'),
       JSON.stringify(snap.trades[0]));
     check('tick: P&L de salida −0.5259 (neto 0.2853 − costo 0.8112) y holdPnl aún pendiente',
       approx(snap.trades[0].pnlUsd, -0.5259, 1e-4) && snap.trades[0].holdPnlUsd === null,
@@ -433,7 +442,7 @@ console.log('v16.6 — 8. Tick real: ventana completa en papel (entrada → stop
       snap = await tickTrader(u, relojMs, deps);
       await sleep(5);
     }
-    check('tick: al cerrar la ventana el trade sigue con holdPnl pendiente y no hay segunda entrada',
+    check('tick: al cerrar la ventana el trade sigue con holdPnl pendiente y no hay segunda entrada (v17: el EV siguió bajo, no una regla de no re-entrada)',
       snap.trades.length === 1 && snap.trades[0].holdPnlUsd === null && snap.entradasHoy === 1
       && snap.stats.holdPendientes === 1);
     const sinRes = await finalizarLiquidacion(u, { ticker, oficial: { result: null, expirationValue: null } });

@@ -39,7 +39,10 @@ const sha256 = (p) => createHash('sha256').update(readFileSync(path.join(ROOT, p
 // tests-v16.6.mjs ya estaba desactualizado (leftover documentado
 // en v16.9); el nuevo hash se verificó contra el contenido real
 // (la regla 1 con el umbral de 5 min está en el archivo).
-const HASH_LIVE_TRADER = '893ffb4a332e2f3910e4d8d28f5bc0ad759a4311dffe9eb05f4cc8013f103e8b';
+// v17 — RE-BASELINE del coordinador: liveTrader.js cambió POR
+// DISEÑO en v17 (unkill + ruta /kalshi/live/unkill + dedup por
+// entradaId). Hash nuevo 3314ec54… verificado con sha256sum.
+const HASH_LIVE_TRADER = '3314ec54ec628c3291e6fa20ca3a98a983a922c8539d02150dea0c3f3928ef92';
 const HASH_PAPER_AUDITOR = '7bd6af9aec741b4f7e1695839f4edf77027ad40c8897210d5f4b48101452263d';
 const HASH_MOTOR = {
   'client/src/kalshi.js': '82812817adee3cf71aba42090f4dc846b7a0a83230ec7b47df0e16f87c447f04',
@@ -258,7 +261,7 @@ console.log('v16.10 — 5. Tick: la salida por lock roto YA NO vende (posición 
   limpiar(u);
 }
 
-console.log('v16.10 — 6. Tick: ganancia sigue vendiendo a R>60 y tras la salida no se re-entra');
+console.log('v16.10 — 6. Tick: ganancia sigue vendiendo a R>60 y tras la salida SE re-entra (v17)');
 {
   const u = 999105;
   const sc = await escenario(u, { closeSegs: 601 });
@@ -267,14 +270,16 @@ console.log('v16.10 — 6. Tick: ganancia sigue vendiendo a R>60 y tras la salid
     snap.posicionAbierta && snap.posicionAbierta.lado === 'yes');
   sc.setBid(0.90); // neto 0.8937 ≥ costo+0.02 (0.8312)
   for (let t = 2; t <= 8; t++) snap = await sc.tick(t);
-  check('(d) con bid 0.90 vende por ganancia a R>60 (P&L +0.0825), entradasHoy=1',
-    snap.posicionAbierta === null && snap.trades.length === 1
-    && snap.trades[0].motivoSalida === 'ganancia' && approx(snap.trades[0].pnlUsd, 0.0825, 1e-4)
-    && snap.entradasHoy === 1,
+  check('(d) con bid 0.90 vende por ganancia a R>60 (P&L +0.0825) y v17 RE-ENTRA: 3 trades, entradasHoy=4, posición abierta',
+    snap.trades.length === 3 && snap.entradasHoy === 4 && snap.posicionAbierta
+    && snap.posicionAbierta.lado === 'yes'
+    && snap.trades[snap.trades.length - 1].motivoSalida === 'ganancia'
+    && approx(snap.trades[snap.trades.length - 1].pnlUsd, 0.0825, 1e-4)
+    && snap.trades.every((t) => t.motivoSalida === 'ganancia'),
     JSON.stringify(snap.trades[0]));
-  check("(g) el tick de la salida registra sin_reentrada (sin posición tras vender, la entrada está bloqueada) y la entrada queda debajo",
-    snap.evaluaciones.length >= 2 && snap.evaluaciones[0].motivo === 'sin_reentrada'
-    && snap.evaluaciones.some((e) => e.motivo === 'entrada'),
+  check("(g) v17: tras cada salida el tick siguiente registra una NUEVA 'entrada' (re-entrada, sin sin_reentrada)",
+    snap.evaluaciones.length === 4 && snap.evaluaciones.every((e) => e.motivo === 'entrada')
+    && !snap.evaluaciones.some((e) => e.motivo === 'sin_reentrada'),
     JSON.stringify(snap.evaluaciones.slice(0, 2)));
   limpiar(u);
 }
@@ -286,9 +291,12 @@ console.log('v16.10 — 7. Tick: stop-loss sigue vendiendo a R>60');
   let snap = await sc.tick(1); // entra SÍ a $0.80 a R=600
   sc.setBid(0.20); // neto 0.1888 ≤ 50% del costo (0.4056)
   for (let t = 2; t <= 8; t++) snap = await sc.tick(t);
-  check('(e) con bid 0.20 vende por stop_loss a R>60 (P&L −0.6224)',
-    snap.posicionAbierta === null && snap.trades.length === 1
-    && snap.trades[0].motivoSalida === 'stop_loss' && approx(snap.trades[0].pnlUsd, -0.6224, 1e-4),
+  check('(e) con bid 0.20 vende por stop_loss a R>60 (P&L −0.6224) y v17 RE-ENTRA: 3 trades, entradasHoy=4, posición abierta',
+    snap.trades.length === 3 && snap.entradasHoy === 4 && snap.posicionAbierta
+    && snap.posicionAbierta.lado === 'yes'
+    && snap.trades[snap.trades.length - 1].motivoSalida === 'stop_loss'
+    && approx(snap.trades[snap.trades.length - 1].pnlUsd, -0.6224, 1e-4)
+    && snap.trades.every((t) => t.motivoSalida === 'stop_loss'),
     JSON.stringify(snap.trades[0]));
   limpiar(u);
 }
@@ -313,9 +321,9 @@ console.log('v16.10 — 8. Tick: fin de ventana R≤3 (vende si pierde, mantiene
     snap.posicionAbierta && snap.posicionAbierta.ticker === sc.ticker && snap.trades.length === 0,
     `R~${65 - 55}`);
   for (let t = 56; t <= 65; t++) snap = await sc.tick(t);
-  check('(f) al llegar a R≤3 vende por fin_ventana (iba perdiendo por $0.0015)',
-    snap.trades.length === 1 && snap.trades[0].motivoSalida === 'fin_ventana'
-    && approx(snap.trades[0].pnlUsd, -0.0015, 1e-4),
+  check('(f) al llegar a R≤3 vende por fin_ventana (iba perdiendo por $0.0015) y v17 RE-ENTRA dos veces más: 3 trades, todos fin_ventana −0.0015',
+    snap.trades.length === 3
+    && snap.trades.every((t) => t.motivoSalida === 'fin_ventana' && approx(t.pnlUsd, -0.0015, 1e-4)),
     JSON.stringify(snap.trades[0]));
   limpiar(u);
 
@@ -339,7 +347,7 @@ console.log('v16.10 — 8. Tick: fin de ventana R≤3 (vende si pierde, mantiene
   limpiar(u2);
 }
 
-console.log('v16.10 — 9. Anillo: motivos de bloqueo (sin_quote_fresca, sin_sigma, sin_tick_brti, tick_desactualizado, sin_tiempo, max_entradas_dia)');
+console.log('v16.10 — 9. Anillo: motivos de bloqueo (sin_quote_fresca, sin_sigma, sin_tick_brti, tick_desactualizado, sin_tiempo) — v17: sin max_entradas_dia ni sin_reentrada');
 {
   // sin_quote_fresca: primer tick de evaluación sin quote aún (el
   // fetch en paralelo todavía no aterrizó).
@@ -436,20 +444,22 @@ console.log('v16.10 — 9. Anillo: motivos de bloqueo (sin_quote_fresca, sin_sig
     JSON.stringify(snapSinTiempo.evaluaciones[0]));
   limpiar(u5);
 
-  // max_entradas_dia: 5 entradas hoy con todo lo demás listo.
+  // v17 — SIN tope de entradas/día: con 5 entradas hoy y todo lo
+  // demás listo, ENTRA (entradasHoy pasa a 6) y el anillo registra
+  // 'entrada', no 'max_entradas_dia'.
   const u6 = 999114;
   const sc6 = await escenario(u6, { closeSegs: 601 });
   sc6.est.entradasHoy = 5;
   const snapTope = await sc6.tick(1);
-  check("(g) con 5 entradas hoy → motivo max_entradas_dia, campos null",
-    snapTope.posicionAbierta === null
-    && snapTope.evaluaciones.length === 1 && snapTope.evaluaciones[0].motivo === 'max_entradas_dia'
-    && snapTope.evaluaciones[0].lado === null && snapTope.evaluaciones[0].p === null,
+  check("(g) v17: con 5 entradas hoy ENTRA igual (entradasHoy=6, motivo 'entrada', sin max_entradas_dia)",
+    snapTope.posicionAbierta !== null && snapTope.entradasHoy === 6
+    && snapTope.evaluaciones.length === 1 && snapTope.evaluaciones[0].motivo === 'entrada'
+    && snapTope.evaluaciones[0].lado === 'yes' && snapTope.evaluaciones[0].p > 0.999,
     JSON.stringify(snapTope.evaluaciones[0]));
   limpiar(u6);
 }
 
-console.log('v16.10 — 10. (h) 1 posición por ventana y sin re-entrada tras salida, a cualquier R');
+console.log('v16.10 — 10. (h) 1 posición a la vez y RE-ENTRADA tras salida (v17), a cualquier R');
 {
   const u = 999115;
   const sc = await escenario(u, { closeSegs: 601 });
@@ -467,22 +477,27 @@ console.log('v16.10 — 10. (h) 1 posición por ventana y sin re-entrada tras sa
   check('(h) en el tick del refetch (quote vieja aún fresca) la posición sigue abierta',
     snap.posicionAbierta && snap.posicionAbierta.ticker === sc.ticker && snap.trades.length === 0);
   snap = await sc.tick(6);
-  check('(h) sale por stop_loss a R=595 y el mismo tick registra sin_reentrada',
-    snap.posicionAbierta === null && snap.trades.length === 1
+  check('(h) sale por stop_loss a R=595 y v17 RE-ENTRA en el mismo tick (posición abierta, entradasHoy=2, anillo con 2 entradas)',
+    snap.trades.length === 1
     && snap.trades[0].motivoSalida === 'stop_loss'
-    && snap.evaluaciones.length === 2 && snap.evaluaciones[0].motivo === 'sin_reentrada',
+    && snap.posicionAbierta !== null && snap.posicionAbierta.lado === 'yes'
+    && snap.entradasHoy === 2
+    && snap.evaluaciones.length === 2 && snap.evaluaciones.every((e) => e.motivo === 'entrada')
+    && snap.evaluaciones[0].R === 595 && snap.evaluaciones[1].R === 600,
     JSON.stringify(snap.evaluaciones.slice(0, 2)));
-  // 10 ticks más con EV favorable (precio 100500, ask 0.80): nada re-entra.
+  // 10 ticks más con EV favorable (precio 100500, ask 0.80): el bucle
+  // entrar→salir por stop se repite mientras el bid siga en 0.20
+  // (la quote nueva con bid 0.82 solo aterriza en el refetch de t=10).
   sc.setBid(0.82);
   for (let t = 7; t <= 16; t++) snap = await sc.tick(t);
-  check('(h) 10 ticks después de la salida, a R>60 y con EV favorable: sigue 1 trade, sin posición, entradasHoy=1',
-    snap.trades.length === 1 && snap.posicionAbierta === null && snap.entradasHoy === 1,
+  check('(h) 10 ticks después de la salida, a R>60 y con EV favorable: 5 trades por stop_loss, posición abierta, entradasHoy=6',
+    snap.trades.length === 5 && snap.posicionAbierta !== null && snap.entradasHoy === 6,
     JSON.stringify(snap.stats));
-  check('(h) el anillo tiene 12 registros: 1 entrada + 11 sin_reentrada (el tick de salida incluido)',
-    snap.evaluaciones.length === 12
-    && snap.evaluaciones[0].motivo === 'sin_reentrada'
-    && snap.evaluaciones[11].motivo === 'entrada'
-    && snap.evaluaciones.slice(0, 11).every((e) => e.motivo === 'sin_reentrada'),
+  check('(h) el anillo tiene 6 registros, todos \'entrada\' (R 591..600, newest first)',
+    snap.evaluaciones.length === 6
+    && snap.evaluaciones.every((e) => e.motivo === 'entrada')
+    && snap.evaluaciones[0].R === 591
+    && snap.evaluaciones[5].R === 600,
     `len=${snap.evaluaciones.length}`);
   limpiar(u);
 }

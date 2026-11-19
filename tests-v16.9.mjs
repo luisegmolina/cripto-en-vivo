@@ -63,8 +63,8 @@ function conciliarStubs(ticker, lado, precio) {
 }
 
 console.log('v16.9 — 0. traderEval.js: constantes y funciones, re-exportadas por paperTrader.js');
-check('constantes del trader: 1 contrato, 5 entradas/día, tope $5, EV mín. $0.015',
-  traderEval.QTY_POR_ORDEN === 1 && traderEval.MAX_ENTRADAS_DIA === 5 &&
+check('constantes del trader: 1 contrato, SIN tope de entradas/día (v17: MAX_ENTRADAS_DIA no existe), tope $5, EV mín. $0.015',
+  traderEval.QTY_POR_ORDEN === 1 && traderEval.MAX_ENTRADAS_DIA === undefined &&
   traderEval.MAX_NOTIONAL_USD === 5 && traderEval.MIN_EV_USD === 0.015);
 check('constantes de modelo: mín. 10 muestras σ, suelo σ $1, anillo 120, ganancia $0.02, stop 50%, R fin 3, quote fresca 5 s, throttle 5 s, 100 trades, 20 en snapshot',
   traderEval.MIN_MUESTRAS_SIGMA === 10 && traderEval.SIGMA_MIN_USD === 1 &&
@@ -77,9 +77,9 @@ check('traderEval exporta erf, normalCdf y las 11 funciones del modelo',
    'calcularSigmaAnillo', 'calcularEV', 'precioSalida', 'valorNetoSalida',
    'evaluarEntrada', 'evaluarSalida', 'calcularHoldPnl', 'calcularStats',
    'dayKey'].every((f) => typeof traderEval[f] === 'function'));
-check('paperTrader.js re-exporta las mismas constantes y funciones (misma referencia, sin copia)',
+check('paperTrader.js re-exporta las mismas constantes y funciones (misma referencia, sin copia); v17: MAX_ENTRADAS_DIA ya no existe en ninguno',
   paperTrader.QTY_POR_ORDEN === traderEval.QTY_POR_ORDEN &&
-  paperTrader.MAX_ENTRADAS_DIA === traderEval.MAX_ENTRADAS_DIA &&
+  paperTrader.MAX_ENTRADAS_DIA === undefined && traderEval.MAX_ENTRADAS_DIA === undefined &&
   paperTrader.MIN_EV_USD === traderEval.MIN_EV_USD &&
   paperTrader.calcularEV === traderEval.calcularEV &&
   paperTrader.evaluarEntrada === traderEval.evaluarEntrada &&
@@ -354,10 +354,10 @@ check('(h2) ensureTraderObserver SÍ llama a handleTraderEntry (el único feed d
   })());
 
 console.log('v16.9 — Versión, cliente y motor intacto');
-check("VERSION_LABEL es 'v16.10 — Evaluar toda la ventana, sin salida por lock roto'",
-  app.includes("const VERSION_LABEL = 'v16.10 — Evaluar toda la ventana, sin salida por lock roto';"));
-check('VERSION.txt empieza en v16.10 y corrige v16.8 (77c8cce4) y v16.5 (6340dd71) como DESPLEGADAS',
-  versionTxt.startsWith('v16.10') &&
+check("VERSION_LABEL es 'v17 — Papel sin límites, sombra libre'",
+  app.includes("const VERSION_LABEL = 'v17 — Papel sin límites, sombra libre';"));
+check('VERSION.txt empieza en v17 y corrige v16.8 (77c8cce4) y v16.5 (6340dd71) como DESPLEGADAS',
+  versionTxt.startsWith('v17') &&
   versionTxt.includes('v16.8 — Regla 1 con tiempo restante (18-nov-2026) — DESPLEGADA en Render (commit 77c8cce4)') &&
   versionTxt.includes('v16.5 — PIN de acceso antes de la web (18-nov-2026) — DESPLEGADA en Render (commit 6340dd71)'));
 check('VERSION.txt (v16.9) dice que NO hay salidas en vivo y que el vivo solo registra would-send con la variable en false',

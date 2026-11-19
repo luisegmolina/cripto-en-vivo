@@ -1,4 +1,4 @@
-// paperTrader.js — v16.10: TRADER CONTINUO EN PAPEL (sin dinero real).
+// paperTrader.js — v17: TRADER CONTINUO EN PAPEL (sin dinero real).
 //
 // PAPEL SOLAMENTE. Este módulo NUNCA envía órdenes a Kalshi: no hay
 // ningún POST/PUT/DELETE a Kalshi aquí, ni importa liveTrader.js ni
@@ -16,6 +16,19 @@
 // auditor). Cada trade cerrado guarda también el P&L hipotético de
 // haber mantenido hasta liquidación (holdPnl), para comparar salida
 // vs mantener.
+//
+// v17 (decisión de Luis, 18-nov): PAPEL SIN LÍMITES. (1) Se QUITA
+// el tope de 5 entradas/día: evaluarEntrada ya no lo comprueba y
+// 'max_entradas_dia' desaparece de los motivos; entradasHoy se
+// sigue contando (abrirPosicion, resetDiaSiCambio, calcularStats)
+// solo para mostrarlo en §6. (2) Se permite RE-ENTRAR en la misma
+// ventana tras una salida: el estado sinReentrada desaparece y el
+// tick siguiente a una salida evalúa la entrada con normalidad.
+// Sigue siendo 1 posición abierta a la vez: solo se re-entra cuando
+// ya no hay posición abierta (el `if (!est.posicionAbierta)`).
+// (3) ultimaEntrada lleva `id` único por entrada (nuevoTradeId),
+// para que el espejo vivo (v17, dedup por entrada) distinga dos
+// entradas del mismo ticker.
 //
 // v16.10 (decisión de Luis, 18-nov 22:36): "Evaluar toda la ventana
 // y quitar el lock roto de la salida". (1) El tick evalúa entrada y
@@ -63,8 +76,9 @@
 //
 // ENTRADA EN PAPEL (1 contrato; mismos topes del experimento live
 // acotado, para que el papel sea comparable al live):
-//   - Sin posición abierta en esa ventana y sin haber salido ya en
-//     ella (tras una salida no se re-entra en la misma ventana).
+//   - Sin posición abierta en esa ventana. v17: tras una salida SE
+//     PUEDE volver a entrar en la misma ventana si el EV lo
+//     justifica (sin re-entrada ya no existe).
 //   - Se evalúa a cualquier R (v16.10): desde el inicio de la
 //     ventana hasta R=1. Antes del último minuto n=0, R'=60 y el
 //     TWAP bloqueado es null (sin muestras del minuto final); el
@@ -75,7 +89,8 @@
 //   - EV×qty > $0.015 por orden (MIN_NET_EDGE_DOLLARS del auditor).
 //   - Notional ≤ $5 por orden (1 contrato × ask < $1: siempre se
 //     cumple, pero la guarda está y se testea).
-//   - Máximo 5 entradas/día (UTC, como liveTrader).
+//   - v17: SIN máximo de entradas/día (antes 5, UTC). entradasHoy
+//     se sigue contando solo para mostrarlo.
 //   Se entra por el lado de mayor EV (SÍ o NO, el que sea).
 //
 // SALIDA CONTINUA EN PAPEL (cada segundo, con posición abierta y
@@ -108,17 +123,20 @@
 //     lado: 'yes'|'no'|null, p: number|null, ev: number|null,
 //     ask: number|null, motivo: string }.
 //   Motivos: 'entrada' cuando entra; si no, 'sin_quote_fresca',
-//   'max_entradas_dia', 'sin_ev_valido', 'ev_bajo', 'max_notional'
+//   'sin_ev_valido', 'ev_bajo', 'max_notional'
 //   (los que devuelve evaluarEntrada), 'sin_sigma' (sigma null),
-//   'sin_tick_brti', 'tick_desactualizado', 'sin_tiempo' (R'<1),
-//   'sin_reentrada' (ya se salió en esta ventana). Solo se registra
+//   'sin_tick_brti', 'tick_desactualizado', 'sin_tiempo' (R'<1).
+//   v17: 'max_entradas_dia' y 'sin_reentrada' YA NO EXISTEN (sin
+//   tope diario y con re-entrada permitida). Solo se registra
 //   cuando la evaluación de entrada corre o está bloqueada (sin
 //   posición abierta; con posición abierta no se registra nada de
 //   entrada). p/ev/ask/lado solo se rellenan cuando evaluarEntrada
 //   devuelve un candidato (ev_bajo, max_notional) o se entra; en
 //   los bloqueos previos son null. Precedencia de los bloqueos:
-//   sin_reentrada → sin_tick_brti → tick_desactualizado →
+//   sin_tick_brti → tick_desactualizado →
 //   sin_quote_fresca → sin_sigma → sin_tiempo → evaluarEntrada.
+//   (v17: sin_reentrada ya no bloquea nada y max_entradas_dia ya
+//   no existe.)
 //   EN MEMORIA, NO persistido: es diagnóstico por segundo y
 //   persistirlo en cada tick sería carga de escritura sin valor; los
 //   trades sí siguen persistidos. Se expone en getSnapshot como
@@ -161,7 +179,7 @@ const {
 // demás imports sigan funcionando sin tocarlos.
 const traderEval = require('./traderEval');
 const {
-  QTY_POR_ORDEN, MAX_ENTRADAS_DIA, MAX_NOTIONAL_USD, MIN_EV_USD,
+  QTY_POR_ORDEN, MAX_NOTIONAL_USD, MIN_EV_USD,
   MIN_MUESTRAS_SIGMA, SIGMA_MIN_USD, ANILLO_MAX,
   GANANCIA_MIN_USD, STOP_FRACCION_COSTO, R_FIN_VENTANA,
   QUOTE_FRESCA_MS, QUOTE_THROTTLE_MS, MAX_TRADES, MAX_TRADES_SNAPSHOT,
@@ -235,7 +253,8 @@ function crearEstadoTrader() {
     // (la posición abierta sí). Se limpia al arrancar, al descubrir
     // un contrato nuevo y al cerrar la ventana.
     ultimaEntrada: null,
-    sinReentrada: {},
+    // v17: sinReentrada ELIMINADO — tras una salida se puede
+    // volver a entrar en la misma ventana si el EV lo justifica.
     // v16.10 — Anillo de evaluaciones de entrada de la ventana en
     // curso (ver encabezado). En memoria, NO se persiste (ver
     // serializarEstado).
@@ -326,7 +345,11 @@ function abrirPosicion(est, { ticker, targetPrice, lado, ask, fee, p, ev, R, brt
   // snapshot y la espeja (o la registra como would-send) con
   // handleTraderEntry. quoteFetchedAt es el fetchedAt de la quote
   // fresca usada en este tick: el vivo la exige fresca (≤5 s).
+  // v17 — `id` único por entrada (nuevoTradeId): el espejo vivo
+  // deduce por entrada, no por ticker, así que dos entradas del
+  // mismo ticker ya no se confunden.
   est.ultimaEntrada = {
+    id: nuevoTradeId(),
     ticker,
     lado,
     ask: +Number(ask).toFixed(4),
@@ -359,7 +382,8 @@ function cerrarPosicion(est, { motivo, precioSalida: precio, ahoraMs }) {
   });
   est.trades.unshift(trade);
   est.trades = est.trades.slice(0, MAX_TRADES);
-  est.sinReentrada[pos.ticker] = true;
+  // v17: ya no se marca sinReentrada — tras la salida se puede
+  // volver a entrar en la misma ventana si el EV lo justifica.
   return trade;
 }
 
@@ -499,7 +523,7 @@ function startTrader(userId, persistido = null) {
   est.quoteActual = null;
   est.quoteEnVuelo = false;
   est.ultimaEntrada = null;
-  est.sinReentrada = {};
+  // v17: sinReentrada eliminado (re-entrada permitida).
   // v16.10 — El anillo de evaluaciones se limpia al arrancar: es
   // diagnóstico de la ventana en curso, no historial.
   est.evaluaciones = [];
@@ -697,21 +721,21 @@ async function tickTrader(userId, ahoraMs = Date.now(), deps = {}) {
       }
 
       // 2b. ENTRADA (sin posición): cada resultado —entrar o no—
-      // queda en el anillo `evaluaciones` (v16.10). Precedencia de
-      // los bloqueos: sin_reentrada → sin_quote_fresca → sin_sigma
-      // → sin_tiempo → evaluarEntrada (sin_ev_valido, ev_bajo,
-      // max_notional, max_entradas_dia).
+      // queda en el anillo `evaluaciones` (v16.10). v17: SIN
+      // tope de entradas/día y SIN bloqueo de re-entrada: tras
+      // una salida, el tick siguiente evalúa la entrada con
+      // normalidad. Precedencia de los bloqueos:
+      // sin_quote_fresca → sin_sigma → sin_tiempo →
+      // evaluarEntrada (sin_ev_valido, ev_bajo, max_notional).
       if (!est.posicionAbierta) {
-        if (est.sinReentrada[est.contrato.ticker]) {
-          registrarBloqueo('sin_reentrada');
-        } else if (!quoteFresca) {
+        if (!quoteFresca) {
           registrarBloqueo('sin_quote_fresca');
         } else if (sigma == null) {
           registrarBloqueo('sin_sigma');
         } else if (Rprima < 1) {
           registrarBloqueo('sin_tiempo');
         } else {
-          const ent = evaluarEntrada({ pYes, pNo, quote: quoteFresca, entradasHoy: est.entradasHoy });
+          const ent = evaluarEntrada({ pYes, pNo, quote: quoteFresca });
           if (ent.entrar) {
             abrirPosicion(est, {
               ticker: est.contrato.ticker, targetPrice: est.contrato.targetPrice,
@@ -760,7 +784,7 @@ async function tickTrader(userId, ahoraMs = Date.now(), deps = {}) {
 }
 
 module.exports = {
-  QTY_POR_ORDEN, MAX_ENTRADAS_DIA, MAX_NOTIONAL_USD, MIN_EV_USD,
+  QTY_POR_ORDEN, MAX_NOTIONAL_USD, MIN_EV_USD,
   MIN_MUESTRAS_SIGMA, SIGMA_MIN_USD, ANILLO_MAX,
   GANANCIA_MIN_USD, STOP_FRACCION_COSTO, R_FIN_VENTANA,
   QUOTE_FRESCA_MS, QUOTE_THROTTLE_MS, MAX_TRADES, MAX_TRADES_SNAPSHOT,
