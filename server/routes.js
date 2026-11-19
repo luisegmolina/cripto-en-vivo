@@ -18,6 +18,7 @@ const { encrypt, decrypt, masterKey } = require('./crypto');
 const kalshi = require('./kalshiServer');
 const brti = require('./brti');
 const paperAuditor = require('./paperAuditor');
+const paperTrader = require('./paperTrader');
 const liveTrader = require('./liveTrader');
 
 // v16.1 — El auditor en papel persiste sus resultados (últimas 20
@@ -31,6 +32,15 @@ paperAuditor.setPersistencia(async (userId, resultados) => {
 // compacta) en cev_user_data kind 'cev_paper_windows' (array plano).
 paperAuditor.setPersistenciaHistorial(async (userId, historial) => {
   await db.setUserData(userId, 'cev_paper_windows', Array.isArray(historial) ? historial : []);
+});
+
+// v16.6 — El trader continuo en papel persiste su registro (trades,
+// posición abierta, contador diario) en cev_user_data kind
+// 'cev_paper_trades', solo al entrar, al salir, al cerrar ventana y
+// al parar, nunca cada segundo. Papel solamente: nada de esto envía
+// órdenes ni toca live.
+paperTrader.setPersistencia(async (userId, estado) => {
+  await db.setUserData(userId, 'cev_paper_trades', estado);
 });
 
 // v16.2 — El bot en vivo persiste su registro de decisiones (máx. 50)
@@ -532,6 +542,40 @@ router.post('/kalshi/paper-audit/autostart', auth, async (req, res) => {
   await db.setUserData(req.user.id, 'paper_audit_settings', { autostart: v, updatedAt: new Date().toISOString() });
   const snap = paperAuditor.getSnapshot(req.user.id);
   res.json({ ok: true, ...snap });
+});
+
+// v16.6 — TRADER CONTINUO EN PAPEL (sin dinero real). Motor propio
+// en server/paperTrader.js: lee el BRTI en vivo y opera en papel el
+// contrato KXBTC15M del minuto final con salidas continuas. NUNCA
+// envía órdenes a Kalshi: no hay ningún POST a Kalshi en ese módulo
+// ni en estas rutas. Sin Kalshi conectado no se puede operar: start
+// devuelve 400 y GET devuelve enabled:false.
+router.get('/kalshi/paper-trader', auth, async (req, res) => {
+  const conn = await db.getKalshiConnection(req.user.id);
+  const snap = paperTrader.getSnapshot(req.user.id);
+  if (!conn) return res.json({ ...snap, enabled: false, kalshiConnected: false, ultimoError: 'Kalshi no conectado: conecta tu cuenta Kalshi abajo para operar en papel.' });
+  res.json({ ...snap, kalshiConnected: true });
+});
+
+router.post('/kalshi/paper-trader/start', auth, async (req, res) => {
+  const conn = await db.getKalshiConnection(req.user.id);
+  if (!conn) return res.status(400).json({ error: 'Conecta primero tu cuenta Kalshi (panel inferior): el trader necesita el BRTI en vivo y sin conexión no hay nada que operar.' });
+  let privateKeyPem;
+  try { privateKeyPem = decrypt(conn.privateKeyEncrypted); } catch (e) {
+    return res.status(500).json({ error: 'No se pudo descifrar tu clave de Kalshi en el servidor. Desconéctala y vuelve a conectarla.' });
+  }
+  // Arranca (o reutiliza) el WS BRTI de este usuario: el trader lee
+  // de ahí cada segundo y así mantiene vivo el WS.
+  brti.ensureBrti(req.user.id, { keyId: conn.keyId, privateKeyPem });
+  const prev = await db.getUserData(req.user.id, 'cev_paper_trades').catch(() => null);
+  const snap = paperTrader.startTrader(req.user.id, prev || null);
+  res.json({ ok: true, ...snap, kalshiConnected: true });
+});
+
+router.post('/kalshi/paper-trader/stop', auth, async (req, res) => {
+  const snap = await paperTrader.stopTrader(req.user.id);
+  const conn = await db.getKalshiConnection(req.user.id);
+  res.json({ ok: true, ...snap, kalshiConnected: !!conn });
 });
 
 // v16.2 — BOT EN VIVO (APAGADO por defecto). Ninguna de estas rutas

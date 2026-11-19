@@ -16,6 +16,7 @@ import Decision from './components/Decision.jsx';
 import Signals from './components/Signals.jsx';
 import ChartSection from './components/ChartSection.jsx';
 import PaperAudit from './components/PaperAudit.jsx';
+import PaperTrader from './components/PaperTrader.jsx';
 import LiveTrader from './components/LiveTrader.jsx';
 import AccountBox from './components/AccountBox.jsx';
 import AuthModal from './components/AuthModal.jsx';
@@ -24,7 +25,7 @@ import { siteGateStatus, onSiteGateLocked, emitSiteGateLocked } from './siteGate
 
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v16.5 — PIN de acceso antes de la web';
+const VERSION_LABEL = 'v16.6 — Trader continuo en papel (entrada y salida)';
 
 function visibleInterval(fn, ms) {
   const t = setInterval(() => { if (!document.hidden) fn(); }, ms);
@@ -757,6 +758,7 @@ export default function App() {
         <Signals kalshiVerdict={kalshiVerdict} kalshiWeakSignal={kalshiWeakSignal} kalshiScore={kalshiScore} kalshiProbAdj={kalshiProbAdj} kalshiBacktest={kalshiBacktest} kalshiRecent={kalshiRecent} kalshiReasons={kalshiReasons} kalshiEntryPrice={kalshiEntryPrice} onKalshiEntryPrice={setKalshiEntryPrice} kalshiDir={kalshiDir} onKalshiDir={setKalshiDir} kalshiAmount={kalshiAmount} onKalshiAmount={setKalshiAmount} onSaveKalshiPosition={setKalshiPosition} onClearKalshiPosition={clearKalshiPosition} kalshiMsg={kalshiMsg} kalshiDecision={kalshiDecision} kalshiPrice={kalshiPrice} kalshiEntryNum={kalshiEntryNum} kalshiExitPrice={kalshiExitPrice} kalshiAtr={kalshiAtr} currency={currency} currencySym={CUR[currency]} fmt={fmt} marketMovement={marketMovement} />
         <ChartSection chartRef={chartRef} candles={candles} candlesError={candlesError} />
         <PaperAudit user={user} fmt={fmt} />
+        <PaperTrader user={user} fmt={fmt} />
         <LiveTrader user={user} fmt={fmt} />
         <AccountBox user={user} token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdict.key} kalshiPrice={kalshiPrice} kalshiRefPrice={kalshiRefPrice} kalshiRefSource={kalshiRefSource} currency={currency} onLogout={handleLogout} onRealDecision={handleRealDecisions} onShowAuth={(m) => { setShowAuth(m); setAuthError(''); }} />
       </section>
