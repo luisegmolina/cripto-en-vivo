@@ -205,7 +205,12 @@ export function estimateSettlementPnl({ dir, targetPrice, avg60s, value, avgPric
 // v15: DECISIÓN en vivo para tu posición real: SAL AHORA / AGUANTA /
 // INVIERTE MÁS (sugerencia educativa, nunca una orden: la app no
 // opera por ti). Reglas de Luis, en orden:
-// 1. Contrato a ≤15¢ -> SAL AHORA (casi perdido, lo diga el BRTI o no).
+// 1. Contrato a ≤15¢ + poco tiempo (≤5 min para el cierre, o tiempo
+//    desconocido) -> SAL AHORA (casi perdido, lo diga el BRTI o no).
+//    Con más de 5 min por delante NO dispara: un contrato barato aún
+//    puede recuperarse si queda tiempo (v16.8: un NO a 13¢ con 9 min
+//    por delante no es salida). Si remainingMs es desconocido, dispara
+//    igual: el fallo seguro es el conservador.
 // 2. BRTI en tu contra + señal en contra -> SAL AHORA.
 // 3. Vas ganando + señal en contra -> SAL AHORA con la ganancia.
 // 4. Vas ganando + señal FUERTE a favor (|score| ≥ 40) + contrato
@@ -214,12 +219,21 @@ export function estimateSettlementPnl({ dir, targetPrice, avg60s, value, avgPric
 // 6. Todo lo demás (mixto o sin BRTI en vivo) -> AGUANTA CON CUIDADO.
 // Sin posición abierta la UI dice "sin posición abierta" y no llama
 // a esta función: aquí nunca se inventa una decisión.
-export function liveDecision({ winning, signalKey, signalScore, dir, contractCents }) {
+export function liveDecision({ winning, signalKey, signalScore, dir, contractCents, remainingMs }) {
   const favors = signalFavorsPosition(dir, signalKey);
   const strongFavor = favors === 'favors' && signalScore != null && Math.abs(signalScore) >= 40;
   const cur = contractCents == null || contractCents === '' ? null : Number(contractCents);
-  if (cur != null && Number.isFinite(cur) && cur <= 15) {
-    return { key: 'exit', label: 'SAL AHORA', color: '#ef4444', reason: `Tu lado vale solo ${cur}¢ de $1: está casi perdido. Salir ahora limita la pérdida en vez de esperar a que cierre en $0.` };
+  // v16.8: la regla 1 solo dispara si queda poco tiempo (≤5 min =
+  // 300000 ms) o si el tiempo restante es desconocido (null, undefined,
+  // no numérico o NaN: el fallo seguro es el conservador). Con más de
+  // 5 min por delante un contrato a ≤15¢ aún puede recuperarse.
+  const remainingKnown = remainingMs != null && remainingMs !== '' && Number.isFinite(Number(remainingMs));
+  const littleTimeLeft = !remainingKnown || Number(remainingMs) <= 300000;
+  if (cur != null && Number.isFinite(cur) && cur <= 15 && littleTimeLeft) {
+    const reason = remainingKnown
+      ? `Tu lado vale solo ${cur}¢ de $1 y quedan ${fmtCountdown(Number(remainingMs))} para el cierre: está casi perdido. Salir ahora limita la pérdida en vez de esperar a que cierre en $0.`
+      : `Tu lado vale solo ${cur}¢ de $1: está casi perdido. Salir ahora limita la pérdida en vez de esperar a que cierre en $0.`;
+    return { key: 'exit', label: 'SAL AHORA', color: '#ef4444', reason };
   }
   if (winning === false && favors === 'against') {
     return { key: 'exit', label: 'SAL AHORA', color: '#ef4444', reason: 'El BRTI va en tu contra y la señal de 15 minutos también. La ventana juega en contra: salir ahora limita la pérdida.' };

@@ -53,7 +53,7 @@ check('estimateSettlementPnl perdiendo: vale $0 -> (0-40)*10/100 = -$4.00',
 
 console.log('v15 — DECISIÓN: SAL AHORA / AGUANTA / INVIERTE MÁS (liveDecision)');
 check('contrato ≤15¢ -> SAL AHORA aunque el BRTI vaya a favor',
-  liveDecision({ winning: true, signalKey: 'up', signalScore: 50, dir: 'up', contractCents: 12 }).label === 'SAL AHORA');
+  liveDecision({ winning: true, signalKey: 'up', signalScore: 50, dir: 'up', contractCents: 12 }).label === 'SAL AHORA'); // v16.8: sin remainingMs -> fallback de tiempo desconocido, la regla 1 dispara como antes.
 check('perdiendo + señal en contra -> SAL AHORA',
   liveDecision({ winning: false, signalKey: 'down', signalScore: -40, dir: 'up', contractCents: 50 }).label === 'SAL AHORA');
 check('ganando + señal en contra -> SAL AHORA con la ganancia',
