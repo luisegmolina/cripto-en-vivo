@@ -61,3 +61,12 @@ CREATE TABLE IF NOT EXISTS cev_webauthn_credentials (
 );
 
 CREATE INDEX IF NOT EXISTS cev_users_email_idx ON cev_users (email);
+
+-- v16.5 — PIN de acceso al sitio (site gate). Solo HASHES bcrypt:
+-- gate_pin_hash (PIN) y gate_recovery_hash (código de recuperación).
+-- El PIN y el código NUNCA se guardan en claro. El servidor también
+-- crea esta tabla al arrancar (db.js SCHEMA, CREATE TABLE IF NOT EXISTS).
+CREATE TABLE IF NOT EXISTS cev_site_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);

@@ -19,10 +19,12 @@ import PaperAudit from './components/PaperAudit.jsx';
 import LiveTrader from './components/LiveTrader.jsx';
 import AccountBox from './components/AccountBox.jsx';
 import AuthModal from './components/AuthModal.jsx';
+import SiteGate from './components/SiteGate.jsx';
+import { siteGateStatus, onSiteGateLocked, emitSiteGateLocked } from './siteGate.js';
 
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v16.4 — Entrada biométrica + experimento live (apagado)';
+const VERSION_LABEL = 'v16.5 — PIN de acceso antes de la web';
 
 function visibleInterval(fn, ms) {
   const t = setInterval(() => { if (!document.hidden) fn(); }, ms);
@@ -37,7 +39,14 @@ async function api(path) {
   try {
     const r = await fetch(path, { signal: ctrl.signal });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || `HTTP ${r.status} en ${path}`);
+    if (!r.ok) {
+      const err = new Error(j.error || `HTTP ${r.status} en ${path}`);
+      err.status = r.status;
+      // v16.5 — 403 {error:'site_gate'}: el PIN se puso en otro lado y
+      // este navegador ya no tiene la cookie: mostrar la pantalla PIN.
+      if (r.status === 403 && j.error === 'site_gate') emitSiteGateLocked();
+      throw err;
+    }
     return j;
   } catch (e) {
     if (e.name === 'AbortError') throw new Error(`Sin respuesta del servidor en 10 s en ${path} (¿el servidor está corriendo?)`);
@@ -128,6 +137,40 @@ export default function App() {
   }, []);
   const serverSyncDone = useRef(false);
 
+  // v16.5 — PIN de acceso al sitio: al arrancar, ANTES de intentar
+  // restaurar la sesión, se comprueba si la puerta está cerrada para
+  // este navegador (GET /api/site-gate/status). Si locked:true, solo
+  // se muestra la pantalla SiteGate (nada de la app, nada del login).
+  // Si la comprobación falla (servidor viejo sin la ruta, o servidor
+  // caído), el arranque sigue normal: sin PIN puesto nada cambia, y
+  // con PIN puesto el servidor bloquea igual las llamadas con 403
+  // site_gate, que aquí mismo muestran la pantalla SiteGate.
+  const [gateState, setGateState] = useState('checking'); // 'checking' | 'locked' | 'open'
+
+  useEffect(() => {
+    let vivo = true;
+    siteGateStatus()
+      .then((s) => { if (vivo) setGateState(s && s.locked ? 'locked' : 'open'); })
+      .catch(() => { if (vivo) setGateState('open'); });
+    return () => { vivo = false; };
+  }, []);
+
+  // v16.5 — si cualquier llamada API devuelve 403 site_gate (el PIN se
+  // puso en otro dispositivo mientras esta pestaña estaba abierta),
+  // muestra la pantalla SiteGate en vez de romper.
+  useEffect(() => onSiteGateLocked(() => setGateState('locked')), []);
+
+  // v16.5 — tras verify OK el servidor ya puso la cookie de puerta en
+  // este navegador: confiar en el verify, no re-preguntar el status.
+  // El status devuelve locked:true mientras exista un PIN, así que
+  // re-preguntarlo dejaría la pantalla del PIN atascada (el PIN sigue
+  // existiendo aunque este navegador ya tenga cookie). Si la cookie no
+  // quedara guardada, la siguiente llamada API daría 403 site_gate y
+  // la pantalla volvería sola.
+  function handleGateUnlocked() {
+    setGateState('open');
+  }
+
   async function pullOrPushServerData() {
     try {
       const [pf, al] = await Promise.allSettled([
@@ -150,13 +193,14 @@ export default function App() {
   }
 
   useEffect(() => {
+    if (gateState !== 'open') return;
     const t = getToken();
     if (!t) return;
     me().then((u) => { setUser(u); pullOrPushServerData(); }).catch((e) => {
       if (e.status === 401) setTokenState(null);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [gateState]);
 
   useEffect(() => {
     const onHash = () => setView(window.location.hash === '#admin' ? 'admin' : 'app');
@@ -362,6 +406,7 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (gateState !== 'open') return; // v16.5 — puerta cerrada: sin sondeo
     if (symbol !== 'BTC') { setKalshiMarket(null); return; }
     let alive = true;
     const load = async () => {
@@ -373,10 +418,10 @@ export default function App() {
     load();
     const stop = visibleInterval(load, 15000);
     return () => { alive = false; stop(); };
-  }, [symbol]);
+  }, [symbol, gateState]);
 
   useEffect(() => {
-    if (activeTab !== 'kalshi' || symbol !== 'BTC' || !user) { setBrti(null); return; }
+    if (gateState !== 'open' || activeTab !== 'kalshi' || symbol !== 'BTC' || !user) { setBrti(null); return; }
     let alive = true;
     const load = async () => {
       try {
@@ -387,9 +432,10 @@ export default function App() {
     load();
     const stop = visibleInterval(load, 2000);
     return () => { alive = false; stop(); };
-  }, [activeTab, symbol, user?.id]);
+  }, [activeTab, symbol, user?.id, gateState]);
 
   useEffect(() => {
+    if (gateState !== 'open') return; // v16.5 — puerta cerrada: sin sondeo
     let alive = true;
     const loadTicker = async () => {
       try {
@@ -442,7 +488,7 @@ export default function App() {
     loadTicker(); loadMarkets(); loadCandles();
     const stops = [visibleInterval(loadTicker, 1000), visibleInterval(loadMarkets, 10000), visibleInterval(loadCandles, 6000)];
     return () => { alive = false; stops.forEach((stop) => stop()); };
-  }, [symbol, currency, candleInterval]);
+  }, [symbol, currency, candleInterval, gateState]);
 
   useEffect(() => {
     candlesRef.current = [];
@@ -453,6 +499,7 @@ export default function App() {
   }, [symbol, currency, candleInterval]);
 
   useEffect(() => {
+    if (gateState !== 'open') return; // v16.5 — puerta cerrada: sin sondeo
     let alive = true;
     const load = async () => {
       const settled = await Promise.allSettled(VERDICT_TFS.map((tf) => api(`/api/candles?symbol=${symbol}&currency=${currency}&interval=${tf}`)));
@@ -469,7 +516,7 @@ export default function App() {
     load();
     const stop = visibleInterval(load, 20000);
     return () => { alive = false; stop(); };
-  }, [symbol, currency]);
+  }, [symbol, currency, gateState]);
 
   useEffect(() => {
     if (!ticker || ticker.price == null) return;
@@ -572,7 +619,9 @@ export default function App() {
       bbLowerSeries.current = null;
       lastChartSig.current = '';
     };
-  }, []);
+    // v16.5 — gateState en deps: con la puerta cerrada el contenedor no
+    // existe al montar (el === null) y el gráfico debe crearse al abrir.
+  }, [gateState]);
 
   useEffect(() => {
     if (!candleSeries.current || !volumeSeries.current || !chartObj.current) return;
@@ -611,6 +660,24 @@ export default function App() {
       chartObj.current.timeScale().scrollToRealTime();
     }
   }, [candles, analysis, chartReady]);
+
+  // v16.5 — puerta del sitio: con la puerta cerrada se muestra SOLO la
+  // pantalla SiteGate (nada de la app, nada del login, tampoco la vista
+  // admin). Mientras se comprueba el status, solo un "comprobando".
+  if (gateState === 'locked') {
+    return (
+      <div className="app">
+        <SiteGate onUnlocked={handleGateUnlocked} />
+      </div>
+    );
+  }
+  if (gateState === 'checking') {
+    return (
+      <div className="app">
+        <section className="card"><p className="muted">Comprobando el acceso al sitio…</p></section>
+      </div>
+    );
+  }
 
   if (view === 'admin') {
     return (

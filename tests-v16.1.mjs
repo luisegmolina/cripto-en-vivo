@@ -195,9 +195,9 @@ check('routes.js expone GET /kalshi/paper-audit y POST start/stop con ensureBrti
 check('db.js y schema.sql admiten kind paper_audit (CHECK + migración DROP/ADD)',
   dbSrc.includes("'paper_audit'") && dbSrc.includes('DROP CONSTRAINT IF EXISTS cev_user_data_kind_check') &&
   schemaSql.includes("'paper_audit'"));
-check('App.jsx monta §6 PaperAudit después de ChartSection y antes de AccountBox, con VERSION_LABEL v16.4 (actualizado por diseño en v16.4)',
+check('App.jsx monta §6 PaperAudit después de ChartSection y antes de AccountBox, con VERSION_LABEL v16.5 (actualizado por diseño en v16.5)',
   app.includes("import PaperAudit from './components/PaperAudit.jsx'") &&
-  app.includes('const VERSION_LABEL = \'v16.4') &&
+  app.includes('const VERSION_LABEL = \'v16.5') &&
   app.indexOf('<PaperAudit user={user} fmt={fmt} />') > app.indexOf('<ChartSection') &&
   app.indexOf('<PaperAudit user={user} fmt={fmt} />') < app.indexOf('<AccountBox'));
 check('PaperAudit.jsx: §6, sondeo cada 2 s, botones Iniciar/Detener, tabla y aviso de papel solamente',

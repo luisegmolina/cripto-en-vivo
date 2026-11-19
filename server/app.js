@@ -20,6 +20,13 @@ if (corsOrigins.length) app.use(cors({ origin: corsOrigins }));
 else if (process.env.NODE_ENV !== 'production') app.use(cors());
 app.use(express.json());
 
+// v16.5 — PIN de acceso al sitio (site gate). Va justo después de
+// express.json() y ANTES de todas las rutas y del estático, para que
+// bloquee también las /api/* públicas y la SPA cuando hay PIN puesto
+// y la petición no trae la cookie de puerta válida (ver server/siteGate.js).
+const siteGate = require('./siteGate');
+app.use(siteGate.gateMiddleware(require('./db')));
+
 const ASSETS = [
   { symbol: 'BTC', name: 'Bitcoin',   coingecko: 'bitcoin',  kraken: 'XBT',  binance: 'BTC' },
   { symbol: 'ETH', name: 'Ethereum',  coingecko: 'ethereum', kraken: 'ETH',  binance: 'ETH' },

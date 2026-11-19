@@ -1,3 +1,8 @@
+// v16.5 — si el servidor responde 403 {error:'site_gate'} (el PIN se
+// puso en otro dispositivo mientras esta pestaña estaba abierta),
+// avisa a App.jsx para que muestre la pantalla SiteGate.
+import { emitSiteGateLocked } from './siteGate.js';
+
 // v12 — Autenticación de usuarios (JWT) + sincronización de cartera/alertas.
 // Solo habla con el propio servidor (/api, mismo origen en producción y
 // proxy a :3001 en desarrollo). El token vive en localStorage; la clave
@@ -42,6 +47,7 @@ export async function apiAuth(path, { method = 'GET', body = null } = {}) {
   if (!res.ok) {
     const err = new Error(data.error || data.message || `Error ${res.status} en ${path}`);
     err.status = res.status;
+    if (res.status === 403 && (data.error === 'site_gate' || data.message === 'site_gate')) emitSiteGateLocked();
     throw err;
   }
   return data;

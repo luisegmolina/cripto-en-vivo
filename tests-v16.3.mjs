@@ -373,8 +373,8 @@ check('paperAuditor.js no lee la env LIVE_TRADING_ENABLED en código (solo la me
   !auditorSrc.includes('process.env.LIVE_TRADING_ENABLED') && auditorSrc.includes('// EN PAPEL; sin la env LIVE_TRADING_ENABLED y sin armar, no sale'));
 check('live sigue APAGADO por defecto (isLiveEnabled false sin la env)',
   trader.isLiveEnabled() === false);
-check("VERSION_LABEL es 'v16.4 — Entrada biométrica + experimento live (apagado)' (actualizado por diseño en v16.4)",
-  app.includes("const VERSION_LABEL = 'v16.4 — Entrada biométrica + experimento live (apagado)';"));
+check("VERSION_LABEL es 'v16.5 — PIN de acceso antes de la web' (actualizado por diseño en v16.5)",
+  app.includes("const VERSION_LABEL = 'v16.5 — PIN de acceso antes de la web';"));
 check('VERSION.txt documenta la v16.3 con sus 7 puntos',
   versionTxt.includes('v16.3 — Arranque auto + watchdog + historial') && versionTxt.includes('Arranque automático') && versionTxt.includes('Watchdog'));
 

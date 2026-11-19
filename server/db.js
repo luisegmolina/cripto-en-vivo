@@ -71,14 +71,21 @@ CREATE TABLE IF NOT EXISTS cev_webauthn_credentials (
   last_used_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS cev_users_email_idx ON cev_users (email);
-ALTER TABLE cev_users ADD COLUMN IF NOT EXISTS token_valid_after TIMESTAMPTZ;`;
+ALTER TABLE cev_users ADD COLUMN IF NOT EXISTS token_valid_after TIMESTAMPTZ;
+-- v16.5 — PIN de acceso al sitio (site gate). Solo HASHES bcrypt:
+-- gate_pin_hash (PIN) y gate_recovery_hash (código de recuperación).
+-- El PIN y el código NUNCA se guardan en claro.
+CREATE TABLE IF NOT EXISTS cev_site_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);`;
 
 function fileLoad() {
   if (fileDb) return fileDb;
   try {
     fileDb = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
   } catch {
-    fileDb = { seq: 1, users: [], kalshi: {}, data: {}, webauthn: {} };
+    fileDb = { seq: 1, users: [], kalshi: {}, data: {}, webauthn: {}, settings: {} };
   }
   return fileDb;
 }
@@ -354,10 +361,57 @@ async function setUserData(userId, kind, data) {
   return true;
 }
 
+// v16.5 — Ajustes del sitio (PIN de acceso). Clave/valor genérico en
+// ambos modos: en Postgres tabla cev_site_settings, en archivo
+// db.settings. Solo se guardan HASHES (bcrypt): el PIN y el código
+// de recuperación NUNCA van en claro (ver server/siteGate.js).
+async function getSiteSetting(key) {
+  const k = String(key || '');
+  if (hasPg) {
+    const r = await pool.query('SELECT value FROM cev_site_settings WHERE key = $1', [k]);
+    return r.rows[0] ? r.rows[0].value : null;
+  }
+  const db = fileLoad();
+  db.settings = db.settings || {};
+  const v = db.settings[k];
+  return v === undefined ? null : v;
+}
+
+async function setSiteSetting(key, value) {
+  const k = String(key || '');
+  const v = String(value);
+  if (hasPg) {
+    await pool.query(
+      `INSERT INTO cev_site_settings (key, value) VALUES ($1,$2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [k, v]);
+    return true;
+  }
+  const db = fileLoad();
+  db.settings = db.settings || {};
+  db.settings[k] = v;
+  fileSave();
+  return true;
+}
+
+async function deleteSiteSetting(key) {
+  const k = String(key || '');
+  if (hasPg) {
+    await pool.query('DELETE FROM cev_site_settings WHERE key = $1', [k]);
+    return true;
+  }
+  const db = fileLoad();
+  db.settings = db.settings || {};
+  delete db.settings[k];
+  fileSave();
+  return true;
+}
+
 module.exports = {
   init, hasPg, publicUser, createUser, getUserByEmail, getUserById, listUsers,
   setUserActive, setUserPassword, setUserRole, countAdmins, setKalshiConnection,
   getKalshiConnection, deleteKalshiConnection, setKalshiLastSync,
   getUserData, setUserData,
+  getSiteSetting, setSiteSetting, deleteSiteSetting,
   addWebauthnCredential, listWebauthnCredentials, getWebauthnCredentialById, updateWebauthnCounter,
 };

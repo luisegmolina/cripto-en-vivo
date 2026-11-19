@@ -13,6 +13,7 @@ const express = require('express');
 const db = require('./db');
 const { hashPassword, verifyPassword, signToken, authMiddleware, requireAdmin, loginRateLimit, registerRateLimit, makeRateLimiter, DUMMY_HASH } = require('./auth');
 const webauthn = require('./webauthn');
+const siteGate = require('./siteGate');
 const { encrypt, decrypt, masterKey } = require('./crypto');
 const kalshi = require('./kalshiServer');
 const brti = require('./brti');
@@ -301,6 +302,94 @@ router.get('/auth/webauthn/credentials', auth, async (req, res) => {
 });
 
 router.post('/auth/logout', auth, (req, res) => res.json({ ok: true }));
+
+// --- PIN de acceso al sitio (v16.5) ---
+// La puerta en sí (bloquear todo sin cookie cuando hay PIN) vive en
+// server/siteGate.js, montada en app.js antes de todas las rutas. Aquí
+// solo las rutas que la gestionan. El PIN y el código de recuperación
+// solo existen como HASH bcrypt en cev_site_settings: nunca en claro,
+// nunca en logs y nunca en otra respuesta que el recoveryCode de una
+// sola vez al poner el PIN.
+// Límite compartido: 5 intentos por IP cada 15 min entre verify y
+// recover (son la misma puerta; un atacante no gana intentos cambiando
+// de ruta). El 401 es genérico a propósito: no delata si el fallo fue
+// el PIN o el código.
+const siteGateRateLimit = makeRateLimiter({ max: 5, windowMs: 15 * 60 * 1000, keyFn: (req) => req.ip || '?', message: 'Demasiados intentos. Espera 15 minutos.' });
+
+// Pública: ¿hay PIN puesto? Solo eso, sin filtrar nada más. El
+// cliente la llama al arrancar para saber si debe pedir el código.
+router.get('/site-gate/status', async (req, res) => {
+  const hash = await db.getSiteSetting('gate_pin_hash');
+  // v16.5 — locked es "puerta cerrada PARA ESTE NAVEGADOR": hay PIN
+  // y esta petición no trae cookie de puerta válida. Sin esto, un
+  // navegador que ya verificó (cookie de 30 días) seguiría viendo la
+  // pantalla del PIN en cada arranque, y tras verify el cliente
+  // quedaría atascado en locked:true porque el PIN sigue existiendo.
+  res.json({ locked: !!hash && !siteGate.gateCookieValid(req) });
+});
+
+// Pública: entrar con el PIN. Correcto → cookie de puerta (30 días)
+// en la respuesta + {ok:true}. Sin PIN puesto → 400 (el cliente solo
+// llama aquí cuando status dice locked:true).
+router.post('/site-gate/verify', siteGateRateLimit, async (req, res) => {
+  const pinHash = await db.getSiteSetting('gate_pin_hash');
+  if (!pinHash) return res.status(400).json({ error: 'No hay código de acceso puesto.' });
+  const { pin } = req.body || {};
+  const ok = typeof pin === 'string' && pin.length > 0 && await verifyPassword(pin, pinHash);
+  if (!ok) return res.status(401).json({ error: 'Código incorrecto.' });
+  siteGate.setGateCookie(res);
+  res.json({ ok: true });
+});
+
+// Admin (JWT + rol admin): poner o cambiar el PIN. Si ya hay PIN,
+// exige el actual (401 si falla); si no hay, no lo exige. El PIN
+// nuevo necesita 4-32 caracteres. Al poner/cambiar se genera UN
+// código de recuperación nuevo: su hash se guarda y el código en
+// claro vuelve SOLO en esta respuesta (no se guarda ni se loguea).
+// También pone la cookie de puerta para no bloquear la sesión del
+// admin que lo pone. Para llegar aquí con PIN puesto hace falta la
+// cookie (la puerta la exige antes que el JWT): primero verify.
+router.post('/site-gate/pin', auth, requireAdmin, async (req, res) => {
+  const { pin, currentPin } = req.body || {};
+  const existingHash = await db.getSiteSetting('gate_pin_hash');
+  if (existingHash) {
+    const ok = typeof currentPin === 'string' && await verifyPassword(currentPin, existingHash);
+    if (!ok) return res.status(401).json({ error: 'El código actual no es correcto.' });
+  }
+  if (!siteGate.validPin(pin)) return res.status(400).json({ error: 'El código de acceso necesita entre 4 y 32 caracteres.' });
+  const recoveryCode = siteGate.generateRecoveryCode();
+  await db.setSiteSetting('gate_pin_hash', await hashPassword(pin));
+  await db.setSiteSetting('gate_recovery_hash', await hashPassword(recoveryCode));
+  siteGate.setGateCookie(res);
+  res.json({ ok: true, recoveryCode });
+});
+
+// Admin (JWT + rol admin): quitar el PIN. Exige el PIN actual; borra
+// el PIN y el código de recuperación y la puerta queda abierta.
+router.post('/site-gate/pin/remove', auth, requireAdmin, async (req, res) => {
+  const { currentPin } = req.body || {};
+  const existingHash = await db.getSiteSetting('gate_pin_hash');
+  if (!existingHash) return res.status(400).json({ error: 'No hay código de acceso puesto.' });
+  const ok = typeof currentPin === 'string' && await verifyPassword(currentPin, existingHash);
+  if (!ok) return res.status(401).json({ error: 'El código actual no es correcto.' });
+  await db.deleteSiteSetting('gate_pin_hash');
+  await db.deleteSiteSetting('gate_recovery_hash');
+  res.json({ ok: true });
+});
+
+// Pública: entrar con el código de recuperación (el que se dio UNA
+// vez al poner el PIN). Correcto → borra PIN y código, la puerta
+// queda abierta ({ok:true}, sin cookie porque ya no hay PIN).
+router.post('/site-gate/recover', siteGateRateLimit, async (req, res) => {
+  const recHash = await db.getSiteSetting('gate_recovery_hash');
+  if (!recHash) return res.status(400).json({ error: 'No hay código de acceso puesto.' });
+  const { code } = req.body || {};
+  const ok = typeof code === 'string' && code.length > 0 && await verifyPassword(code, recHash);
+  if (!ok) return res.status(401).json({ error: 'Código incorrecto.' });
+  await db.deleteSiteSetting('gate_pin_hash');
+  await db.deleteSiteSetting('gate_recovery_hash');
+  res.json({ ok: true });
+});
 
 // --- Datos del usuario (cartera virtual / alertas en la cuenta) ---
 router.get('/me/portfolio', auth, async (req, res) => res.json({ portfolio: (await db.getUserData(req.user.id, 'portfolio')) || null }));

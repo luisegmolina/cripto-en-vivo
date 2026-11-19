@@ -29,8 +29,8 @@ check('last15mKey usa candlesSignature(candles15m) (incluye close/high/low, no s
   app.includes('const last15mKey = candlesSignature(candles15m);'));
 check('setMtfCandles usa candlesSignature(o[tf]) para actualizar cierres intra-vela en 1m/5m/15m/1h',
   app.includes('const sig = (o) => VERDICT_TFS.map((tf) => candlesSignature(o[tf])).join(\'|\');'));
-check('VERSION_LABEL actualizado a la versión actual (v16.4) en App.jsx',
-  app.includes("const VERSION_LABEL = 'v16.4"));
+check('VERSION_LABEL actualizado a la versión actual (v16.5) en App.jsx',
+  app.includes("const VERSION_LABEL = 'v16.5"));
 
 console.log('v15.5 — 2. Calibración de analyze() (sin sesgo inverso en RSI medio + impulso corto EMA 9/20 + 3 velas)');
 {
