@@ -1,4 +1,4 @@
-// paperTrader.js — v16.6: TRADER CONTINUO EN PAPEL (sin dinero real).
+// paperTrader.js — v16.10: TRADER CONTINUO EN PAPEL (sin dinero real).
 //
 // PAPEL SOLAMENTE. Este módulo NUNCA envía órdenes a Kalshi: no hay
 // ningún POST/PUT/DELETE a Kalshi aquí, ni importa liveTrader.js ni
@@ -10,11 +10,25 @@
 //
 // Qué hace: un motor propio por usuario, con intervalo de 1 s
 // (perezoso, con unref, como el auditor), que opera EN PAPEL el
-// contrato KXBTC15M del minuto final con un modelo de probabilidad
-// continuo y salida continua (no solo "entrar y esperar a la
-// liquidación" como el auditor). Cada trade cerrado guarda también
-// el P&L hipotético de haber mantenido hasta liquidación (holdPnl),
-// para comparar salida vs mantener.
+// contrato KXBTC15M durante TODA la ventana (v16.10: antes solo el
+// último minuto) con un modelo de probabilidad continuo y salida
+// continua (no solo "entrar y esperar a la liquidación" como el
+// auditor). Cada trade cerrado guarda también el P&L hipotético de
+// haber mantenido hasta liquidación (holdPnl), para comparar salida
+// vs mantener.
+//
+// v16.10 (decisión de Luis, 18-nov 22:36): "Evaluar toda la ventana
+// y quitar el lock roto de la salida". (1) El tick evalúa entrada y
+// salida a cualquier R (desde el inicio de la ventana hasta R=1);
+// antes del último minuto n=0 y R'=60 (el modelo ya lo contempla) y
+// el TWAP bloqueado es null hasta que haya muestras del minuto
+// final. (2) La salida por lock roto desaparece: quedan solo
+// ganancia, stop-loss y fin de ventana. (3) Cada evaluación de
+// entrada (o intento bloqueado) deja constancia en el anillo
+// `evaluaciones` en memoria (ver abajo). El vivo NO cambia:
+// ultimaEntrada ahora puede generarse a cualquier R y sigue
+// alimentando el camino v16.9 (ensureTraderObserver →
+// handleTraderEntry → verificarLimitesTrader → evaluarDecision).
 //
 // MODELO DE PROBABILIDAD (documentado aquí y testeado en
 // tests-v16.6.mjs):
@@ -51,7 +65,12 @@
 // acotado, para que el papel sea comparable al live):
 //   - Sin posición abierta en esa ventana y sin haber salido ya en
 //     ella (tras una salida no se re-entra en la misma ventana).
-//   - Quote fresca (≤5 s) del mismo ticker.
+//   - Se evalúa a cualquier R (v16.10): desde el inicio de la
+//     ventana hasta R=1. Antes del último minuto n=0, R'=60 y el
+//     TWAP bloqueado es null (sin muestras del minuto final); el
+//     salto es target − v y p sale de la normal con R'=60.
+//   - Quote fresca (≤5 s) del mismo ticker, pedida con el mismo
+//     throttle (≥5 s) a cualquier R.
 //   - Sigma disponible (≥10 muestras en el anillo) y R' ≥ 1.
 //   - EV×qty > $0.015 por orden (MIN_NET_EDGE_DOLLARS del auditor).
 //   - Notional ≤ $5 por orden (1 contrato × ask < $1: siempre se
@@ -60,14 +79,18 @@
 //   Se entra por el lado de mayor EV (SÍ o NO, el que sea).
 //
 // SALIDA CONTINUA EN PAPEL (cada segundo, con posición abierta y
-// quote fresca; sin quote fresca se mantiene y se reintenta al
-// segundo siguiente; NUNCA se sale con dato desactualizado):
-//   (a) lock roto: llevas SÍ y salto > −95, o llevas NO y salto < 95.
+// quote fresca, a cualquier R; sin quote fresca se mantiene y se
+// reintenta al segundo siguiente; NUNCA se sale con dato
+// desactualizado). Reglas vigentes (v16.10):
 //   (b) ganancia: valor neto de salida ≥ costo + $0.02 por contrato.
 //   (c) stop-loss: valor neto ≤ 50% del costo.
 //   (d) fin de ventana (R ≤ 3): si el valor neto < costo, vende por
 //       lo que queda en vez de esperar al $0 (si va ganando, se
 //       mantiene hasta liquidación).
+//   La regla (a) lock roto se ELIMINÓ en v16.10 por decisión de
+//   Luis (18-nov 22:36): el salto ya no vende nunca. El dato que la
+//   mató: ventana 26NOV182330-30, entrada NO a $0.45 a las 22:29:01
+//   y salida 1 s después por lock roto (−$0.0445 en papel).
 //   Precio de salida: SÍ → yesBidDollars real del quote; NO →
 //   1 − yesAskDollars. SUPOSICIÓN DOCUMENTADA: la quote NO trae
 //   noBidDollars; se usa la identidad de libro único (la misma que
@@ -76,6 +99,33 @@
 //   necesario no está (yesBid null para SÍ, yesAsk null para NO),
 //   no hay precio de salida y se mantiene.
 //   Valor neto de salida = precio de salida − fee(precio de salida).
+//
+// REGISTRO DE EVALUACIONES (v16.10, diagnóstico "por qué no
+// apostó"): cada tick en que se evalúa —o se intenta evaluar— una
+// entrada y no se entra, deja constancia en `evaluaciones`, un
+// anillo en memoria con las últimas 20 por usuario, newest first:
+//   { at: ISO string, R: segundos restantes (number),
+//     lado: 'yes'|'no'|null, p: number|null, ev: number|null,
+//     ask: number|null, motivo: string }.
+//   Motivos: 'entrada' cuando entra; si no, 'sin_quote_fresca',
+//   'max_entradas_dia', 'sin_ev_valido', 'ev_bajo', 'max_notional'
+//   (los que devuelve evaluarEntrada), 'sin_sigma' (sigma null),
+//   'sin_tick_brti', 'tick_desactualizado', 'sin_tiempo' (R'<1),
+//   'sin_reentrada' (ya se salió en esta ventana). Solo se registra
+//   cuando la evaluación de entrada corre o está bloqueada (sin
+//   posición abierta; con posición abierta no se registra nada de
+//   entrada). p/ev/ask/lado solo se rellenan cuando evaluarEntrada
+//   devuelve un candidato (ev_bajo, max_notional) o se entra; en
+//   los bloqueos previos son null. Precedencia de los bloqueos:
+//   sin_reentrada → sin_tick_brti → tick_desactualizado →
+//   sin_quote_fresca → sin_sigma → sin_tiempo → evaluarEntrada.
+//   EN MEMORIA, NO persistido: es diagnóstico por segundo y
+//   persistirlo en cada tick sería carga de escritura sin valor; los
+//   trades sí siguen persistidos. Se expone en getSnapshot como
+//   `evaluaciones` (el cliente lo renderiza con este contrato
+//   exacto). Se limpia al arrancar y al descubrir un contrato nuevo
+//   (es diagnóstico de la ventana en curso); al cerrar la ventana se
+//   conserva para poder inspeccionar la última ventana.
 //
 // LIQUIDACIÓN: al cerrar la ventana (R≤0) sin salida, la posición
 // se liquida en papel al resultado oficial ($1 o $0 según el lado)
@@ -134,6 +184,28 @@ const traders = new Map(); // userId -> estado
 let persistenciaHook = null;
 let tickerInterval = null;
 let tradeSeq = 0;
+// v16.10 — Tamaño del anillo de evaluaciones de entrada (ver
+// REGISTRO DE EVALUACIONES en el encabezado).
+const MAX_EVALUACIONES = 20;
+
+// v16.10 — Registra una evaluación de entrada (o un intento
+// bloqueado) en el anillo en memoria del usuario: newest first,
+// máx. MAX_EVALUACIONES. `reg` lleva { at, R, lado, p, ev, ask,
+// motivo } con el contrato exacto del encabezado.
+function registrarEvaluacion(est, reg) {
+  if (!est) return;
+  if (!Array.isArray(est.evaluaciones)) est.evaluaciones = [];
+  est.evaluaciones.unshift({
+    at: reg.at,
+    R: reg.R,
+    lado: reg.lado != null ? reg.lado : null,
+    p: reg.p != null ? reg.p : null,
+    ev: reg.ev != null ? reg.ev : null,
+    ask: reg.ask != null ? reg.ask : null,
+    motivo: reg.motivo,
+  });
+  est.evaluaciones = est.evaluaciones.slice(0, MAX_EVALUACIONES);
+}
 
 function setPersistencia(fn) {
   persistenciaHook = typeof fn === 'function' ? fn : null;
@@ -150,7 +222,6 @@ function crearEstadoTrader() {
     ultimoBrti: null,
     ultimoError: null,
     ultimoDescubrimientoMs: 0,
-    ultimoHeartbeatMs: 0,
     tickEnCurso: false,
     twapActual: null,
     saltoActual: null,
@@ -165,6 +236,10 @@ function crearEstadoTrader() {
     // un contrato nuevo y al cerrar la ventana.
     ultimaEntrada: null,
     sinReentrada: {},
+    // v16.10 — Anillo de evaluaciones de entrada de la ventana en
+    // curso (ver encabezado). En memoria, NO se persiste (ver
+    // serializarEstado).
+    evaluaciones: [],
     liquidacionProgramada: {},
     trades: [],
     day: null,
@@ -173,6 +248,11 @@ function crearEstadoTrader() {
 }
 
 function serializarEstado(est) {
+  // v16.10 — `evaluaciones` NO se persiste a propósito: es
+  // diagnóstico por segundo (hasta 1 registro/tick) y persistirlo
+  // en cada tick sería carga de escritura sin valor; los trades sí
+  // siguen persistidos (al entrar, al salir, al cerrar ventana y
+  // al parar).
   return {
     trades: est.trades,
     posicionAbierta: est.posicionAbierta,
@@ -367,6 +447,7 @@ function getSnapshot(userId, ahoraMs = Date.now()) {
     return {
       enabled: false, startedAt: null, contrato: null, posicionAbierta: null,
       ultimaEntrada: null,
+      evaluaciones: [],
       trades: [], stats: calcularStats([]), ultimoError: null,
       entradasHoy: 0, dia: dayKey(new Date(ahoraMs)),
       quote: null, saltoActual: null, pActual: null, sigmaActual: null, twapActual: null,
@@ -378,6 +459,9 @@ function getSnapshot(userId, ahoraMs = Date.now()) {
     contrato: est.contrato,
     posicionAbierta: est.posicionAbierta ? { ...est.posicionAbierta } : null,
     ultimaEntrada: est.ultimaEntrada ? { ...est.ultimaEntrada } : null,
+    // v16.10 — Anillo de evaluaciones de entrada (newest first,
+    // máx. 20, en memoria). Copia para no exponer el anillo interno.
+    evaluaciones: (Array.isArray(est.evaluaciones) ? est.evaluaciones : []).slice(0, MAX_EVALUACIONES).map((e) => ({ ...e })),
     trades: est.trades.slice(0, MAX_TRADES_SNAPSHOT),
     stats: calcularStats(est.trades, est.entradasHoy),
     ultimoError: est.ultimoError,
@@ -408,7 +492,6 @@ function startTrader(userId, persistido = null) {
   est.ultimoBrti = null;
   est.ultimoError = null;
   est.ultimoDescubrimientoMs = 0;
-  est.ultimoHeartbeatMs = 0;
   est.twapActual = null;
   est.saltoActual = null;
   est.pActual = null;
@@ -417,6 +500,9 @@ function startTrader(userId, persistido = null) {
   est.quoteEnVuelo = false;
   est.ultimaEntrada = null;
   est.sinReentrada = {};
+  // v16.10 — El anillo de evaluaciones se limpia al arrancar: es
+  // diagnóstico de la ventana en curso, no historial.
+  est.evaluaciones = [];
   // El anillo de volatilidad se conserva entre arranques (es del
   // subyacente, no de la ventana).
   if (persistido && typeof persistido === 'object') {
@@ -500,6 +586,7 @@ async function tickTrader(userId, ahoraMs = Date.now(), deps = {}) {
       }
       est.contrato = nuevo;
       est.ultimaEntrada = null; // v16.9: contrato nuevo, entrada vieja fuera
+      est.evaluaciones = []; // v16.10: ventana nueva, diagnóstico nuevo
       est.muestras = new Map();
       est.ultimoUpdatedAt = null;
       est.ultimoBrti = null;
@@ -516,48 +603,49 @@ async function tickTrader(userId, ahoraMs = Date.now(), deps = {}) {
     const closeEpochSec = Math.floor(est.contrato.closeMs / 1000);
     const R = closeEpochSec - segActualEpoch;
 
-    // 2. Fuera del último minuto: heartbeat cada 30 s (leer el BRTI
-    //    actualiza lastPollAt y mantiene vivo el WS). El valor
-    //    también alimenta el anillo de volatilidad.
-    if (R > 60) {
-      if (ahoraMs - est.ultimoHeartbeatMs >= 30000) {
-        est.ultimoHeartbeatMs = ahoraMs;
-        const s = leerBrti(userId);
-        if (s && s.value != null) {
-          est.ultimoBrti = { value: s.value, avg60s: s.avg60s, avg15mFinal: s.avg15mFinal, updatedAt: s.updatedAt };
-          if (s.updatedAt !== est.ultimoUpdatedAt) {
-            est.ultimoUpdatedAt = s.updatedAt;
-            empujarAnillo(est, s.value);
-          }
+    // 2. Ventana en curso (R ≥ 1, v16.10): se evalúa entrada y
+    //    salida a CUALQUIER R, no solo en el último minuto. Antes
+    //    del último minuto n=0 y R'=60 (el modelo ya lo contempla)
+    //    y el TWAP bloqueado es null hasta que haya muestras del
+    //    minuto final. Leer el BRTI cada segundo mantiene vivo el
+    //    WS (antes lo hacía el heartbeat de 30 s) y el anillo σ se
+    //    alimenta igual con cada tick fresco.
+    if (R >= 1) {
+      const ahoraIso = new Date(ahoraMs).toISOString();
+      // Sin posición abierta, cada intento bloqueado de evaluar la
+      // entrada deja constancia en el anillo (v16.10). Con posición
+      // abierta no se registra nada de entrada.
+      const registrarBloqueo = (motivo) => {
+        if (!est.posicionAbierta) {
+          registrarEvaluacion(est, { at: ahoraIso, R, lado: null, p: null, ev: null, ask: null, motivo });
         }
-      }
-      return getSnapshot(userId, ahoraMs);
-    }
-
-    // 3. Ventana del último minuto (T-60 a T-1).
-    if (R >= 1 && R <= 60) {
+      };
       const estadoBrti = await Promise.resolve(leerBrti(userId));
       if (!estadoBrti || estadoBrti.value == null) {
         est.ultimoError = 'Sin tick BRTI (WS sin dato). El trader espera al próximo tick.';
+        registrarBloqueo('sin_tick_brti');
         return getSnapshot(userId, ahoraMs);
       }
       const edadMs = estadoBrti.updatedAt ? ahoraMs - new Date(estadoBrti.updatedAt).getTime() : null;
       if (edadMs == null || edadMs > 15000) {
         est.ultimoError = 'Tick BRTI desactualizado (>15 s). El trader espera al próximo tick.';
+        registrarBloqueo('tick_desactualizado');
         return getSnapshot(userId, ahoraMs);
       }
       est.ultimoBrti = { value: estadoBrti.value, avg60s: estadoBrti.avg60s, avg15mFinal: estadoBrti.avg15mFinal, updatedAt: estadoBrti.updatedAt };
       est.ultimoError = null;
 
       // Solo suma la muestra (y el anillo) si el tick es fresco.
+      // Muestras del minuto final SOLO con R en [1,60]; el anillo
+      // de volatilidad se alimenta a cualquier R.
       if (estadoBrti.updatedAt !== est.ultimoUpdatedAt) {
         est.ultimoUpdatedAt = estadoBrti.updatedAt;
-        est.muestras.set(segActualEpoch, estadoBrti.value);
+        if (R <= 60) est.muestras.set(segActualEpoch, estadoBrti.value);
         empujarAnillo(est, estadoBrti.value);
       }
 
       // Cotización en paralelo, sin bloquear el muestreo: a
-      // cualquier R del minuto final (no solo R≤20 como el auditor),
+      // cualquier R (v16.10; antes solo en el minuto final),
       // con throttle ≥5 s y una sola petición en vuelo. Si falla o
       // tarda, el muestreo sigue igual y la entrada/salida esperan
       // a la próxima quote fresca.
@@ -592,13 +680,14 @@ async function tickTrader(userId, ahoraMs = Date.now(), deps = {}) {
       est.sigmaActual = sigma == null ? null : +sigma.toFixed(2);
       est.pActual = (pYes == null || pNo == null) ? null : { pYes: +pYes.toFixed(4), pNo: +pNo.toFixed(4) };
 
-      // 3a. SALIDA primero: con posición abierta y quote fresca.
+      // 2a. SALIDA primero: con posición abierta y quote fresca, a
+      // cualquier R. Reglas vigentes (b) ganancia, (c) stop-loss y
+      // (d) fin de ventana; sin lock roto (v16.10).
       if (est.posicionAbierta && quoteFresca) {
         const precio = precioSalida({ lado: est.posicionAbierta.lado, quote: quoteFresca });
         const valorNeto = valorNetoSalida(precio);
         const dec = evaluarSalida({
-          lado: est.posicionAbierta.lado, salto, twapBloqueado: twap,
-          targetPrice: est.contrato.targetPrice, segundosRestantes: R,
+          lado: est.posicionAbierta.lado, segundosRestantes: R,
           valorNeto, costoTotal: est.posicionAbierta.costoTotal,
         });
         if (dec.accion === 'vender') {
@@ -607,24 +696,40 @@ async function tickTrader(userId, ahoraMs = Date.now(), deps = {}) {
         }
       }
 
-      // 3b. ENTRADA: sin posición, sin haber salido ya en esta
-      // ventana, con quote fresca, sigma disponible y R'≥1.
-      if (!est.posicionAbierta && !est.sinReentrada[est.contrato.ticker] && quoteFresca && Rprima >= 1 && sigma != null) {
-        const ent = evaluarEntrada({ pYes, pNo, quote: quoteFresca, entradasHoy: est.entradasHoy });
-        if (ent.entrar) {
-          abrirPosicion(est, {
-            ticker: est.contrato.ticker, targetPrice: est.contrato.targetPrice,
-            lado: ent.lado, ask: ent.ask, fee: ent.fee, p: ent.p, ev: ent.ev,
-            R, brtiValue: estadoBrti.value, ahoraMs,
-            quoteFetchedAt: quoteFresca ? quoteFresca.fetchedAt : null,
-          });
-          await persistir(userId);
+      // 2b. ENTRADA (sin posición): cada resultado —entrar o no—
+      // queda en el anillo `evaluaciones` (v16.10). Precedencia de
+      // los bloqueos: sin_reentrada → sin_quote_fresca → sin_sigma
+      // → sin_tiempo → evaluarEntrada (sin_ev_valido, ev_bajo,
+      // max_notional, max_entradas_dia).
+      if (!est.posicionAbierta) {
+        if (est.sinReentrada[est.contrato.ticker]) {
+          registrarBloqueo('sin_reentrada');
+        } else if (!quoteFresca) {
+          registrarBloqueo('sin_quote_fresca');
+        } else if (sigma == null) {
+          registrarBloqueo('sin_sigma');
+        } else if (Rprima < 1) {
+          registrarBloqueo('sin_tiempo');
+        } else {
+          const ent = evaluarEntrada({ pYes, pNo, quote: quoteFresca, entradasHoy: est.entradasHoy });
+          if (ent.entrar) {
+            abrirPosicion(est, {
+              ticker: est.contrato.ticker, targetPrice: est.contrato.targetPrice,
+              lado: ent.lado, ask: ent.ask, fee: ent.fee, p: ent.p, ev: ent.ev,
+              R, brtiValue: estadoBrti.value, ahoraMs,
+              quoteFetchedAt: quoteFresca ? quoteFresca.fetchedAt : null,
+            });
+            registrarEvaluacion(est, { at: ahoraIso, R, lado: ent.lado, p: ent.p, ev: ent.ev, ask: ent.ask, motivo: 'entrada' });
+            await persistir(userId);
+          } else {
+            registrarEvaluacion(est, { at: ahoraIso, R, lado: ent.lado, p: ent.p, ev: ent.ev, ask: ent.ask, motivo: ent.motivo });
+          }
         }
       }
       return getSnapshot(userId, ahoraMs);
     }
 
-    // 4. Cierre (R <= 0): la ventana terminó. Con posición abierta
+    // 3. Cierre (R <= 0): la ventana terminó. Con posición abierta
     //    pasa a pendiente de liquidación; los holdPnl pendientes de
     //    trades ya cerrados por salida se resuelven con el mismo
     //    resultado oficial (se pide a los 15 s, reintento a los 45 s).
@@ -664,6 +769,7 @@ module.exports = {
   evaluarEntrada, evaluarSalida, calcularHoldPnl, calcularStats, dayKey,
   setPersistencia, getSnapshot, startTrader, stopTrader, tickTrader,
   finalizarLiquidacion, programarLiquidacion, crearEstadoTrader,
+  MAX_EVALUACIONES,
   // Solo para pruebas: inspeccionar el estado en memoria.
   _traders: traders,
 };

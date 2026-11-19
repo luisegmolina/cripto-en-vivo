@@ -128,9 +128,9 @@ check('dist/index.html existe y referencia un bundle', Boolean(bundleMatch));
 if (bundleMatch) {
   const bundle = readFileSync(path.join(ROOT, 'client/dist/assets', bundleMatch[1]), 'utf8');
   check('bundle distinto al de v15.2 (index-DxgRBFRC.js)', bundleMatch[1] !== 'index-DxgRBFRC.js');
-  // v16.9: la etiqueta de versión del bundle avanzó a v16.9; el check
+  // v16.10: la etiqueta de versión del bundle avanzó a v16.10; el check
   // busca la etiqueta actual, no la vieja.
-  check('bundle trae la etiqueta de versión actual (v16.9)', bundle.includes('v16.9'));
+  check('bundle trae la etiqueta de versión actual (v16.10)', bundle.includes('v16.10'));
   check('bundle trae "Apuesta a la SUBIDA" y "Apuesta a la BAJADA"',
     bundle.includes('Apuesta a la SUBIDA') && bundle.includes('Apuesta a la BAJADA'));
   check('bundle trae el orden nuevo (1 · Mi posición)', bundle.includes('1 · Mi posición en vivo'));

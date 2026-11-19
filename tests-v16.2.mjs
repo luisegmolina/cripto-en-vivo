@@ -243,9 +243,9 @@ console.log('v16.2 — 12. Persistencia live_trade_log y cableado del cliente');
 check('db.js y schema.sql admiten kind live_trade_log (CHECK + migración DROP/ADD)',
   dbSrc.includes("'live_trade_log'") && dbSrc.includes('DROP CONSTRAINT IF EXISTS cev_user_data_kind_check') &&
   schemaSql.includes("'live_trade_log'"));
-check('App.jsx monta §7 LiveTrader después de PaperAudit y antes de AccountBox, con VERSION_LABEL v16.9 (actualizado por diseño en v16.9)',
+check('App.jsx monta §7 LiveTrader después de PaperAudit y antes de AccountBox, con VERSION_LABEL v16.10 (actualizado por diseño en v16.10)',
   app.includes("import LiveTrader from './components/LiveTrader.jsx'") &&
-  app.includes("const VERSION_LABEL = 'v16.9") &&
+  app.includes("const VERSION_LABEL = 'v16.10") &&
   app.indexOf('<LiveTrader user={user} fmt={fmt} />') > app.indexOf('<PaperAudit user={user} fmt={fmt} />') &&
   app.indexOf('<LiveTrader user={user} fmt={fmt} />') < app.indexOf('<AccountBox'));
 check('LiveTrader.jsx: §7 con título dinámico según live/armed/killed (v16.7, ya no hay título fijo "APAGADO"), sondeo status cada 2 s, botón Detener (kill), Armar deshabilitado sin live',

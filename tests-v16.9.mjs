@@ -354,10 +354,10 @@ check('(h2) ensureTraderObserver SÍ llama a handleTraderEntry (el único feed d
   })());
 
 console.log('v16.9 — Versión, cliente y motor intacto');
-check("VERSION_LABEL es 'v16.9 — Entradas del trader en vivo'",
-  app.includes("const VERSION_LABEL = 'v16.9 — Entradas del trader en vivo';"));
-check('VERSION.txt empieza en v16.9 y corrige v16.8 (77c8cce4) y v16.5 (6340dd71) como DESPLEGADAS',
-  versionTxt.startsWith('v16.9') &&
+check("VERSION_LABEL es 'v16.10 — Evaluar toda la ventana, sin salida por lock roto'",
+  app.includes("const VERSION_LABEL = 'v16.10 — Evaluar toda la ventana, sin salida por lock roto';"));
+check('VERSION.txt empieza en v16.10 y corrige v16.8 (77c8cce4) y v16.5 (6340dd71) como DESPLEGADAS',
+  versionTxt.startsWith('v16.10') &&
   versionTxt.includes('v16.8 — Regla 1 con tiempo restante (18-nov-2026) — DESPLEGADA en Render (commit 77c8cce4)') &&
   versionTxt.includes('v16.5 — PIN de acceso antes de la web (18-nov-2026) — DESPLEGADA en Render (commit 6340dd71)'));
 check('VERSION.txt (v16.9) dice que NO hay salidas en vivo y que el vivo solo registra would-send con la variable en false',

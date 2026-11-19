@@ -41,8 +41,17 @@ const sha256 = (p) => createHash('sha256').update(readFileSync(path.join(ROOT, p
 // ensureObservador). paperAuditor.js sigue en su baseline original.
 const HASH_LIVE_TRADER = '893ffb4a332e2f3910e4d8d28f5bc0ad759a4311dffe9eb05f4cc8013f103e8b';
 const HASH_PAPER_AUDITOR = '7bd6af9aec741b4f7e1695839f4edf77027ad40c8897210d5f4b48101452263d';
+// v16.10 — RE-BASELINE del hash del motor del cliente (kalshi.js):
+// el baseline 7eb7beef… era anterior a v16.8 y fallaba desde entonces
+// (69/70 preexistente). El mismatch es SOLO el cambio documentado de
+// la regla 1 de v16.8 (parámetro remainingMs, umbral 300000 ms, reason
+// con el tiempo restante): verificado contra el contenido real —
+// tests-v16.8.mjs 25/25, kalshi.js sin ninguna mención a paperTrader
+// ni al trader, y analysis.js, verdict.js y windowOutcome.js con hash
+// idéntico al baseline. Hash nuevo 82812817… verificado con sha256sum.
+// kalshi.js NO cambia en v16.10.
 const HASH_MOTOR = {
-  'client/src/kalshi.js': '7eb7beef78e7f22d24face676aeac4455b1d9b24eedb2b345969149d6a24211b',
+  'client/src/kalshi.js': '82812817adee3cf71aba42090f4dc846b7a0a83230ec7b47df0e16f87c447f04',
   'client/src/analysis.js': '19ad00b9ab5fbcbf5b9fc5efbcb019b3862051424a6c256e4308c09c2c94d050',
   'client/src/verdict.js': '9104e9a67a6533bf613aa97e74a467e1fd214d0d6c43809e13e5b8615bcf068c',
   'client/src/windowOutcome.js': '2e23b9953d31de18e587ca74343d82acd6ca5a03dc6e797cdb4f083754aa3282',
@@ -161,15 +170,17 @@ console.log('v16.6 — 2. Entrada: solo con EV > umbral');
     sinEv.entrar === false && sinEv.motivo === 'sin_ev_valido');
 }
 
-console.log('v16.6 — 3. Salida: cada regla (costo $0.50)');
+console.log('v16.6 — 3. Salida: cada regla (costo $0.50) — v16.10: SIN lock roto');
 {
   const base = { lado: 'yes', twapBloqueado: 100010, targetPrice: 100000, segundosRestantes: 30, valorNeto: 0.45, costoTotal: 0.50 };
-  check('(a) lock roto SÍ: salto −50 (> −95) vende; salto −96 mantiene',
-    pt.evaluarSalida({ ...base, salto: -50 }).motivo === 'lock_roto'
+  check('v16.10 (a) SIN lock roto SÍ: salto −50 (bloqueo roto) con neto 0.45 MANTIENE; salto −96 también mantiene',
+    pt.evaluarSalida({ ...base, salto: -50 }).accion === 'mantener'
     && pt.evaluarSalida({ ...base, salto: -96 }).accion === 'mantener');
-  check('(a) lock roto NO: salto +50 (< 95) vende; salto +96 mantiene',
-    pt.evaluarSalida({ ...base, lado: 'no', salto: 50 }).motivo === 'lock_roto'
+  check('v16.10 (a) SIN lock roto NO: salto +50 (bloqueo roto) con neto 0.45 MANTIENE; salto +96 también mantiene',
+    pt.evaluarSalida({ ...base, lado: 'no', salto: 50 }).accion === 'mantener'
     && pt.evaluarSalida({ ...base, lado: 'no', salto: 96 }).accion === 'mantener');
+  check('v16.10 (a) sin lock roto, con neto bajo manda el stop (salto −50 + neto 0.25 → stop_loss, no lock_roto)',
+    pt.evaluarSalida({ ...base, salto: -50, valorNeto: 0.25 }).motivo === 'stop_loss');
   check('(b) ganancia: neto 0.52 (≥ costo+0.02) vende; 0.5199 mantiene',
     pt.evaluarSalida({ ...base, salto: -200, valorNeto: 0.52 }).motivo === 'ganancia'
     && pt.evaluarSalida({ ...base, salto: -200, valorNeto: 0.5199 }).accion === 'mantener');
@@ -182,11 +193,12 @@ console.log('v16.6 — 3. Salida: cada regla (costo $0.50)');
     && pt.evaluarSalida({ ...base, salto: -200, segundosRestantes: 4, valorNeto: 0.40 }).accion === 'mantener');
   check('sin valor neto (sin precio de salida) siempre mantiene',
     pt.evaluarSalida({ ...base, salto: -50, valorNeto: null }).accion === 'mantener');
-  check('prioridad: lock roto gana a ganancia (salto −50 + neto 0.60 → lock_roto)',
-    pt.evaluarSalida({ ...base, salto: -50, valorNeto: 0.60 }).motivo === 'lock_roto');
-  check('R\'=0 (salto null): TWAP<target con SÍ → lock_roto; TWAP≥target y neto<costo en R=1 → fin_ventana',
-    pt.evaluarSalida({ ...base, salto: null, twapBloqueado: 99990, segundosRestantes: 1, valorNeto: 0.45 }).motivo === 'lock_roto'
-    && pt.evaluarSalida({ ...base, salto: null, twapBloqueado: 100010, segundosRestantes: 1, valorNeto: 0.45 }).motivo === 'fin_ventana');
+  check('v16.10 prioridad: sin lock roto la ganancia manda (salto −50 + neto 0.60 → ganancia)',
+    pt.evaluarSalida({ ...base, salto: -50, valorNeto: 0.60 }).motivo === 'ganancia');
+  check('v16.10 R\'=0 (salto null): sin lock roto, TWAP<target con SÍ y neto<costo en R=1 → fin_ventana; TWAP≥target igual → fin_ventana; con neto≥costo mantiene (nada lo saca)',
+    pt.evaluarSalida({ ...base, salto: null, twapBloqueado: 99990, segundosRestantes: 1, valorNeto: 0.45 }).motivo === 'fin_ventana'
+    && pt.evaluarSalida({ ...base, salto: null, twapBloqueado: 100010, segundosRestantes: 1, valorNeto: 0.45 }).motivo === 'fin_ventana'
+    && pt.evaluarSalida({ ...base, salto: null, twapBloqueado: 99990, segundosRestantes: 1, valorNeto: 0.51 }).accion === 'mantener');
 }
 
 console.log('v16.6 — 4. Stats: con salidas vs manteniendo');
@@ -261,8 +273,8 @@ check('liveTrader.js intacto (sha256 del baseline)',
   sha256('server/liveTrader.js') === HASH_LIVE_TRADER);
 check('motor del cliente intacto (kalshi.js, analysis.js, verdict.js, windowOutcome.js)',
   Object.entries(HASH_MOTOR).every(([p, h]) => sha256(p) === h));
-check('VERSION.txt está en v16.7 (el trabajo del cliente actualiza la versión)',
-  src('VERSION.txt').startsWith('v16.9'));
+check('VERSION.txt está en v16.10 (el trabajo del cliente actualiza la versión)',
+  src('VERSION.txt').startsWith('v16.10'));
 check('routes.js cablea GET/POST /kalshi/paper-trader y el hook cev_paper_trades',
   routesSrc.includes("'/kalshi/paper-trader'") && routesSrc.includes('paperTrader.getSnapshot')
   && routesSrc.includes('paperTrader.startTrader') && routesSrc.includes('paperTrader.stopTrader')
@@ -335,7 +347,7 @@ try {
   else if (existsSync(dbFile)) unlinkSync(dbFile);
 }
 
-console.log('v16.6 — 8. Tick real: ventana completa en papel (entrada → lock roto → liquidación)');
+console.log('v16.6 — 8. Tick real: ventana completa en papel (entrada → stop-loss → liquidación) — v16.10: sin lock roto');
 {
   const { crearEstadoTrader, startTrader, stopTrader, tickTrader, finalizarLiquidacion, getSnapshot, _traders } = pt;
   const limpiar = (uid) => { _traders.delete(uid); };
@@ -344,8 +356,10 @@ console.log('v16.6 — 8. Tick real: ventana completa en papel (entrada → lock
     persistCalls.push({ uid, estado: JSON.parse(JSON.stringify(estado)) });
   });
 
-  // 8a. Entrada por EV, salida por lock roto, sin re-entrada, y el
-  // P&L con salida difiere del de mantener hasta liquidación.
+  // 8a. Entrada por EV, salida por stop-loss (v16.10: la salida por
+  // lock roto ya no existe; con el neto en 0.2853, por debajo del 50%
+  // del costo, manda el stop), sin re-entrada, y el P&L con salida
+  // difiere del de mantener hasta liquidación.
   {
     const u = 999601;
     const base = (Math.floor(Date.now() / 1000) + 5) * 1000;
@@ -353,14 +367,14 @@ console.log('v16.6 — 8. Tick real: ventana completa en papel (entrada → lock
     const ticker = 'KXBTC15M-TEST-TRADER-A';
     const contrato = { ticker, targetPrice: 100000, closeMs, closeIso: 'x' };
     // Precio 100500 en las primeras muestras (TWAP $500 por encima del
-    // target) y 100010 después: el salto queda ≈ −100, dentro del
-    // bloqueo (≤ −95) para el SÍ. Con salto −12 el bloqueo ya estaría
-    // roto y la posición no se sostendría ni un tick.
+    // target) y 100010 después: el salto queda ≈ −100. v16.10: el salto
+    // ya no dispara ninguna salida (sin lock roto); solo importan el
+    // neto (ganancia/stop) y el fin de ventana.
     let precioActual = 100500;
     // Bid 0.82 al entrar: neto 0.8097, entre el stop (0.4056) y la
-    // ganancia (0.8312): no sale por (b) ni por (c) mientras el
-    // bloqueo aguanta. En t=20 pasa a 0.30, para que el refetch de
-    // ese segundo capture el bid bajo y la salida del t=21 lo use.
+    // ganancia (0.8312): no sale por ganancia ni por stop. En t=20 pasa
+    // a 0.30, para que el refetch de ese segundo capture el bid bajo y
+    // la salida del t=21 lo use.
     let bidActual = 0.82;
     let relojMs = base;
     const deps = {
@@ -384,13 +398,13 @@ console.log('v16.6 — 8. Tick real: ventana completa en papel (entrada → lock
       JSON.stringify(snap.posicionAbierta));
     check('tick: la entrada se persistió (hook llamado con la posición abierta)',
       persistCalls.some((c) => c.uid === u && c.estado.posicionAbierta && c.estado.posicionAbierta.ticker === ticker));
-    precioActual = 100010; // el precio baja al nivel del target, el bloqueo aguanta (salto ≈ −100)
+    precioActual = 100010; // el precio baja al nivel del target (salto ≈ −100; sin lock roto en v16.10, el salto no saca)
     for (let t = 14; t <= 19; t++) {
       relojMs = base + t * 1000;
       snap = await tickTrader(u, relojMs, deps);
       await sleep(5);
     }
-    check('tick: con el bloqueo intacto la posición se mantiene (sin salida por ganancia ni stop)',
+    check('tick: con el neto entre stop y ganancia la posición se mantiene (sin salida por ganancia ni stop)',
       snap.posicionAbierta && snap.posicionAbierta.ticker === ticker && snap.trades.length === 0);
     bidActual = 0.30; // el refetch de t=20 captura el bid bajo
     relojMs = base + 20 * 1000;
@@ -398,16 +412,18 @@ console.log('v16.6 — 8. Tick real: ventana completa en papel (entrada → lock
     await sleep(5);
     check('tick: en t=20, sin caída aún, sigue abierta (el bid bajo por sí solo no vende)',
       snap.posicionAbierta && snap.posicionAbierta.ticker === ticker);
-    // El precio cae por debajo del target: el bloqueo se rompe.
+    // El precio cae por debajo del target: sin lock roto (v16.10) la
+    // salida la dispara el stop-loss, porque el neto (0.2853) ya está
+    // por debajo del 50% del costo (0.4056).
     precioActual = 99900;
     for (let t = 21; t <= 30; t++) {
       relojMs = base + t * 1000;
       snap = await tickTrader(u, relojMs, deps);
       await sleep(5);
     }
-    check('tick: tras la caída sale por lock_roto (no por stop, aunque el neto también lo tocaría) y no re-entra',
+    check('tick: tras la caída sale por stop_loss (sin lock roto en v16.10) y no re-entra',
       snap.posicionAbierta === null && snap.trades.length === 1
-      && snap.trades[0].motivoSalida === 'lock_roto' && snap.entradasHoy === 1,
+      && snap.trades[0].motivoSalida === 'stop_loss' && snap.entradasHoy === 1,
       JSON.stringify(snap.trades[0]));
     check('tick: P&L de salida −0.5259 (neto 0.2853 − costo 0.8112) y holdPnl aún pendiente',
       approx(snap.trades[0].pnlUsd, -0.5259, 1e-4) && snap.trades[0].holdPnlUsd === null,
@@ -447,8 +463,10 @@ console.log('v16.6 — 8. Tick real: ventana completa en papel (entrada → lock
     const closeMs = base + 65 * 1000;
     const ticker = 'KXBTC15M-TEST-TRADER-B';
     const contrato = { ticker, targetPrice: 100000, closeMs, closeIso: 'x' };
-    // Mismo bloqueo que en 8a (muestras a 100500, luego 100010): el
-    // salto queda ≈ −100 y el bloqueo del SÍ aguanta toda la ventana.
+    // Mismas muestras que en 8a (100500, luego 100010): el salto queda
+    // ≈ −100. v16.10: el salto ya no dispara salidas; la posición se
+    // mantiene porque el neto (0.87 − fee ≈ 0.86) no toca ganancia
+    // (0.8789) ni stop (0.4295) y en R≤3 va ganando.
     let precioActual = 100500;
     let relojMs = base;
     const deps = {

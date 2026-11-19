@@ -92,10 +92,10 @@ check('LiveTrader.jsx: sondeo, botones y registro intactos (status cada 2 s, kil
   && liveTraderJsx.includes('disabled={busy || !user || !live || armed}'));
 
 console.log('v16.7 — 4. Versión, motor intacto, live apagado');
-check("VERSION_LABEL es 'v16.9 — Entradas del trader en vivo' (actualizado por diseño en v16.9)",
-  appJsx.includes("const VERSION_LABEL = 'v16.9 — Entradas del trader en vivo';"));
-check('VERSION.txt empieza en v16.9 y la nota de v16.6 ya dice DESPLEGADA (no "solo en local")',
-  versionTxt.startsWith('v16.9') && versionTxt.includes('DESPLEGADA en Render (commit b579569b)')
+check("VERSION_LABEL es 'v16.10 — Evaluar toda la ventana, sin salida por lock roto' (actualizado por diseño en v16.10)",
+  appJsx.includes("const VERSION_LABEL = 'v16.10 — Evaluar toda la ventana, sin salida por lock roto';"));
+check('VERSION.txt empieza en v16.10 y la nota de v16.6 ya dice DESPLEGADA (no "solo en local")',
+  versionTxt.startsWith('v16.10') && versionTxt.includes('DESPLEGADA en Render (commit b579569b)')
   && !versionTxt.includes('v16.6 — Trader continuo en papel (entrada y salida), solo en local, sin desplegar'));
 check('el motor no menciona el trader ni la puerta (kalshi.js, analysis.js, verdict.js, windowOutcome.js)',
   motor.every((m) => !m.includes('paperTrader') && !m.includes('paper-trader')

@@ -1,4 +1,4 @@
-// traderEval.js — v16.9: EVALUACIÓN PURA DEL TRADER (sin red, sin estado).
+// traderEval.js — v16.10: EVALUACIÓN PURA DEL TRADER (sin red, sin estado).
 //
 // Extraído de paperTrader.js (v16.6) sin cambiar una sola fórmula:
 // las constantes de límites y las funciones puras del modelo de
@@ -7,15 +7,24 @@
 // holdPnl, stats y dayKey) viven aquí para que paperTrader.js y
 // liveTrader.js las compartan sin duplicarlas.
 //
+// v16.10 — La regla (a) de salida (lock roto) se ELIMINÓ por
+// decisión de Luis (18-nov 22:36): el salto ya no vende nunca. La
+// salida queda solo en (b) ganancia, (c) stop-loss y (d) fin de
+// ventana. El dato real que la mató: ventana 26NOV182330-30, el
+// trader entró NO a $0.45 a las 22:29:01 y salió 1 s después por
+// lock roto (−$0.0445 en papel). MIN_REQ_MOVE_USD ($95, salto que
+// rompía el lock) ya no se usa aquí y se quitó del require; sigue
+// viviendo en paperAuditor.js, donde el auditor francotirador sí
+// lo usa (ese módulo no se toca).
+//
 // SOLO requiere de paperAuditor lo que el modelo necesita:
-// calcularComisionPorContrato (fee taker 0.07×a×(1−a)),
-// MIN_NET_EDGE_DOLLARS ($0.015, umbral de EV) y MIN_REQ_MOVE_USD
-// ($95, salto que rompe el lock). No importa liveTrader, no lee
-// LIVE_TRADING_ENABLED, no toca la red ni persiste nada.
+// calcularComisionPorContrato (fee taker 0.07×a×(1−a)) y
+// MIN_NET_EDGE_DOLLARS ($0.015, umbral de EV). No importa
+// liveTrader, no lee LIVE_TRADING_ENABLED, no toca la red ni
+// persiste nada.
 const {
   calcularComisionPorContrato,
   MIN_NET_EDGE_DOLLARS,
-  MIN_REQ_MOVE_USD,
 } = require('./paperAuditor');
 
 // --- Límites (los del experimento live acotado, v16.4) ---
@@ -156,22 +165,18 @@ function evaluarEntrada({ pYes, pNo, quote, quoteFresca = true, entradasHoy = 0,
   return { ...base, entrar: true, motivo: null, lado: mejor.lado, ask: mejor.ask, fee: mejor.fee, ev: mejor.ev, p: mejor.p };
 }
 
-// Decisión pura de salida. Orden de las reglas: (a) lock roto,
-// (b) ganancia, (c) stop-loss, (d) fin de ventana. Sin valor neto
-// (sin precio de salida) se mantiene siempre.
-function evaluarSalida({ lado, salto, twapBloqueado, targetPrice, segundosRestantes, valorNeto, costoTotal } = {}) {
+// Decisión pura de salida. Orden de las reglas (v16.10): (b)
+// ganancia, (c) stop-loss, (d) fin de ventana. La regla (a) lock
+// roto se ELIMINÓ por decisión de Luis (18-nov 22:36): el salto
+// ya no vende nunca, así que `salto`, `twapBloqueado` y
+// `targetPrice` ya no son parámetros (una posición con el salto
+// <95 —o >−95 según el lado— y sin ganancia ni stop se MANTIENE).
+// Sin valor neto (sin precio de salida) se mantiene siempre.
+function evaluarSalida({ lado, segundosRestantes, valorNeto, costoTotal } = {}) {
   const mantener = { accion: 'mantener', motivo: null };
   if (valorNeto == null || !Number.isFinite(valorNeto)) return mantener;
   const costo = Number(costoTotal);
   if (!Number.isFinite(costo) || costo <= 0) return mantener;
-  // (a) lock roto. Con R'=0 no hay salto: lo decide el TWAP vs target.
-  let lockRoto;
-  if (salto != null && Number.isFinite(salto)) {
-    lockRoto = lado === 'yes' ? salto > -MIN_REQ_MOVE_USD : salto < MIN_REQ_MOVE_USD;
-  } else {
-    lockRoto = lado === 'yes' ? twapBloqueado < targetPrice : twapBloqueado >= targetPrice;
-  }
-  if (lockRoto) return { accion: 'vender', motivo: 'lock_roto' };
   // (b) ganancia: neto ≥ costo + $0.02 por contrato.
   if (valorNeto >= costo + GANANCIA_MIN_USD) return { accion: 'vender', motivo: 'ganancia' };
   // (c) stop-loss: neto ≤ 50% del costo.
@@ -196,7 +201,7 @@ function calcularHoldPnl({ lado, costoTotal, resultadoOficial } = {}) {
 
 // Stats sobre los trades guardados (máx. MAX_TRADES). pnlTotalUsd
 // suma el P&L realizado de los cerrados; pnlConSalidasUsd suma solo
-// los cerrados POR SALIDA (reglas a-d) y pnlManteniendoUsd suma el
+// los cerrados POR SALIDA (reglas b-d) y pnlManteniendoUsd suma el
 // holdPnl conocido de esos mismos trades (parcial si hay
 // holdPendientes > 0: aún no llegó la liquidación de su ventana).
 function calcularStats(trades, entradasHoy = 0) {

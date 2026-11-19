@@ -1,11 +1,15 @@
-// PaperTrader.jsx — v16.6: §6 Trader continuo en papel (sin dinero real).
+// PaperTrader.jsx — v16.10: §6 Trader continuo en papel (sin dinero real).
 // Solo LEE el estado del trader del servidor (GET /api/kalshi/paper-trader
 // cada 2 s) y pide Iniciar/Detener. Nunca envía órdenes a Kalshi ni toca
 // dinero real: entra y sale EN PAPEL con el modelo de probabilidad
-// continuo del servidor (server/paperTrader.js), con las 4 reglas de
-// salida (lock roto, ganancia +$0.02, stop-loss 50% del costo, fin de
-// ventana). El trader EN VIVO no tiene salida: liveTrader.js NO se
-// tocó en esta versión y sigue sin vender antes de la liquidación.
+// continuo del servidor (server/paperTrader.js), con las 3 reglas de
+// salida (ganancia +$0.02, stop-loss 50% del costo, fin de
+// ventana). v16.10 QUITÓ la salida por lock roto: el trader evalúa
+// entrada y salida a cualquier R de la ventana (antes solo en el
+// último minuto), y cada evaluación queda en el anillo `evaluaciones`
+// del snapshot (entradas y rechazos con su motivo). El trader EN VIVO
+// no tiene salida: liveTrader.js NO se tocó en esta versión y sigue
+// sin vender antes de la liquidación.
 // Avisos honestos: solo corre mientras el servidor está despierto
 // (Render gratis duerme tras 15 min sin tráfico y el WS BRTI se
 // cierra a los 5 min sin sondeo), y el backtest del motor sigue en
@@ -38,11 +42,30 @@ function fmtHora(iso) {
 }
 
 const MOTIVOS = {
+  // lock_roto solo aparece en trades cerrados ANTES de v16.10 (la
+  // salida por lock roto se quitó en v16.10); se conserva la etiqueta
+  // para que el historial viejo se siga leyendo.
   lock_roto: 'Lock roto',
   ganancia: 'Ganancia +$0.02',
   stop_loss: 'Stop-loss 50%',
   fin_ventana: 'Fin de ventana',
   liquidacion: 'Liquidación',
+};
+
+// Motivos del anillo `evaluaciones` del snapshot (v16.10): 'entrada'
+// cuando entró; si no, el motivo del rechazo según el servidor.
+const MOTIVOS_EVAL = {
+  entrada: 'Entrada',
+  sin_quote_fresca: 'Sin quote fresca',
+  max_entradas_dia: 'Máx. 5 entradas/día',
+  sin_ev_valido: 'Sin EV válido',
+  ev_bajo: 'EV bajo (≤ $0.015)',
+  max_notional: 'Notional > $5',
+  sin_sigma: 'Sin σ',
+  sin_tick_brti: 'Sin tick BRTI',
+  tick_desactualizado: 'Tick BRTI desactualizado',
+  sin_tiempo: 'Sin tiempo restante',
+  sin_reentrada: 'Sin re-entrada en la ventana',
 };
 
 // Comisión taker de Kalshi por contrato: 0.07 × precio × (1 − precio).
@@ -100,6 +123,10 @@ export default function PaperTrader({ user, fmt }) {
     pendientesLiquidacion: 0, entradasHoy: 0,
   };
   const trades = Array.isArray(data?.trades) ? data.trades : [];
+  // v16.10: anillo de evaluaciones del snapshot (newest first, máx.
+  // 20, solo en memoria del servidor). Si el campo falta (servidor
+  // anterior a v16.10) se muestra la sección vacía, sin inventar datos.
+  const evaluaciones = Array.isArray(data?.evaluaciones) ? data.evaluaciones : [];
   const pos = data?.posicionAbierta || null;
   const contrato = data?.contrato || null;
   const quote = data?.quote || null;
@@ -184,7 +211,9 @@ export default function PaperTrader({ user, fmt }) {
             </b>
           </span>
           <span className="muted">
-            Sale sola si: el lock se rompe (salto &lt; $95 a favor), el neto llega a costo + $0.02, el neto cae a la mitad del costo, o quedan ≤3 s y va perdiendo.
+            Sale sola si: el neto llega a costo + $0.02, el neto cae a la mitad del costo, o quedan ≤3 s y va perdiendo.
+            Ya no hay salida por lock roto (v16.10): una posición con el bloqueo roto se mantiene hasta que dispare
+            ganancia, stop o fin de ventana.
           </span>
         </div>
       ) : (
@@ -232,6 +261,44 @@ export default function PaperTrader({ user, fmt }) {
                   <td className={`num ${typeof t.pnlUsd === 'number' ? (t.pnlUsd >= 0 ? 'up' : 'down') : ''}`}>{typeof t.pnlUsd === 'number' ? fmtUsd(t.pnlUsd) : '—'}</td>
                   <td className={`num ${typeof t.holdPnlUsd === 'number' ? (t.holdPnlUsd >= 0 ? 'up' : 'down') : ''}`}>{typeof t.holdPnlUsd === 'number' ? fmtUsd(t.holdPnlUsd) : '—'}</td>
                   <td>{t.estado === 'cerrado' ? 'Cerrado' : 'Pendiente liquidación'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <h3>Últimas evaluaciones ({evaluaciones.length})</h3>
+      <p className="muted">
+        Cada evaluación de entrada del trader, a cualquier R de la ventana: las que entraron y las rechazadas con su
+        motivo (p y EV estimados, ask del momento). Anillo de las últimas 20, solo en memoria del servidor.
+      </p>
+      {evaluaciones.length === 0 ? (
+        <p className="muted">Sin evaluaciones todavía.</p>
+      ) : (
+        <div className="audit-table-wrap">
+          <table className="audit-table">
+            <thead>
+              <tr>
+                <th>Hora</th>
+                <th>R</th>
+                <th>Lado</th>
+                <th>p</th>
+                <th>EV</th>
+                <th>Ask</th>
+                <th>Motivo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {evaluaciones.map((ev, i) => (
+                <tr key={ev.at || i}>
+                  <td>{fmtHora(ev.at)}</td>
+                  <td className="num">{ev.R != null ? `T-${ev.R}s` : '—'}</td>
+                  <td>{ev.lado === 'yes' ? 'SÍ' : ev.lado === 'no' ? 'NO' : '—'}</td>
+                  <td className="num">{ev.p != null ? `${fmtNum(ev.p * 100, 1)}%` : '—'}</td>
+                  <td className="num">{ev.ev != null ? fmtUsd(ev.ev) : '—'}</td>
+                  <td className="num">{ev.ask != null ? `$${fmtNum(ev.ask, 4)}` : '—'}</td>
+                  <td>{ev.motivo ? (MOTIVOS_EVAL[ev.motivo] || ev.motivo) : '—'}</td>
                 </tr>
               ))}
             </tbody>

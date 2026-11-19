@@ -321,8 +321,8 @@ check('client/src/auth.js exporta saveToken para el login por huella',
   clientAuth.includes('export function saveToken'));
 
 console.log('v16.4 — 7. Versión, motor intacto, live sigue apagado');
-check("VERSION_LABEL es 'v16.9 — Entradas del trader en vivo' (actualizado por diseño en v16.9)",
-  appJsx.includes("const VERSION_LABEL = 'v16.9 — Entradas del trader en vivo';"));
+check("VERSION_LABEL es 'v16.10 — Evaluar toda la ventana, sin salida por lock roto' (actualizado por diseño en v16.10)",
+  appJsx.includes("const VERSION_LABEL = 'v16.10 — Evaluar toda la ventana, sin salida por lock roto';"));
 check('VERSION.txt documenta la Parte 1 (WebAuthn, rpID, challenges, Parte 2 pendiente)',
   versionTxt.includes('v16.4 — Entrada biométrica') && versionTxt.includes('cripto-en-vivo.onrender.com')
   && versionTxt.includes('Challenges de un solo uso') && versionTxt.includes('Parte 2'));
