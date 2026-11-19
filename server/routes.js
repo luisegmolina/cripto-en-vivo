@@ -11,7 +11,8 @@
 // las respuestas solo traen keyIdPreview (4 primeros + 4 últimos).
 const express = require('express');
 const db = require('./db');
-const { hashPassword, verifyPassword, signToken, authMiddleware, requireAdmin, loginRateLimit, registerRateLimit, DUMMY_HASH } = require('./auth');
+const { hashPassword, verifyPassword, signToken, authMiddleware, requireAdmin, loginRateLimit, registerRateLimit, makeRateLimiter, DUMMY_HASH } = require('./auth');
+const webauthn = require('./webauthn');
 const { encrypt, decrypt, masterKey } = require('./crypto');
 const kalshi = require('./kalshiServer');
 const brti = require('./brti');
@@ -47,6 +48,25 @@ liveTrader.setCredentialsProvider(async (userId) => {
   const conn = await db.getKalshiConnection(userId);
   if (!conn) return null;
   try { return { keyId: conn.keyId, privateKeyPem: decrypt(conn.privateKeyEncrypted) }; } catch { return null; }
+});
+// v16.4 Parte 2 — Guarda de saldo del experimento live acotado: el
+// trader consulta el saldo real de Kalshi antes de enviar (ver
+// liveTrader.js handleViableSignal). Sin saldo legible no se envía
+// (fail-closed). El saldo de Kalshi viene en centavos: se convierte
+// a dólares. Un fallo aquí devuelve null, nunca un saldo inventado.
+liveTrader.setBalanceProvider(async (userId) => {
+  const conn = await db.getKalshiConnection(userId);
+  if (!conn) return null;
+  let privateKeyPem;
+  try { privateKeyPem = decrypt(conn.privateKeyEncrypted); } catch { return null; }
+  try {
+    const j = await kalshi.kalshiGet('/trade-api/v2/portfolio/balance', { keyId: conn.keyId, privateKeyPem });
+    const cents = j && j.balance != null ? Number(j.balance) : NaN;
+    return Number.isFinite(cents) ? cents / 100 : null;
+  } catch (e) {
+    console.log('[live-trader] No se pudo leer el saldo de Kalshi para la guarda de saldo:', e.message);
+    return null;
+  }
 });
 liveTrader.ensureObservador();
 
@@ -222,6 +242,64 @@ router.get('/auth/me', auth, async (req, res) => {
   res.json({ user: { ...req.user, kalshiConnected: !!conn } });
 });
 
+// v16.4 — Entrada con huella / rostro (WebAuthn / passkeys, Parte 1).
+// El login con WebAuthn devuelve la MISMA sesión JWT que el login con
+// password; el password sigue funcionando exactamente igual. Los
+// challenges son de un solo uso y caducan a los 5 minutos (ver
+// server/webauthn.js): reutilizar o caducar un reto da 400.
+// rpID: cripto-en-vivo.onrender.com. Solo autenticador de plataforma
+// (huella/rostro del propio dispositivo).
+// Límite: 20 intentos por IP cada 15 min en el registro (con sesión),
+// y el mismo límite del login con password en el login por huella.
+const webauthnRegisterRateLimit = makeRateLimiter({ max: 20, windowMs: 15 * 60 * 1000, keyFn: (req) => req.ip || '?', message: 'Demasiados intentos. Espera 15 minutos.' });
+
+router.post('/auth/webauthn/register/options', auth, webauthnRegisterRateLimit, async (req, res) => {
+  const options = await webauthn.crearOpcionesRegistro(db, req.user);
+  res.json({ options });
+});
+
+router.post('/auth/webauthn/register/verify', auth, webauthnRegisterRateLimit, async (req, res) => {
+  try {
+    const cred = await webauthn.verificarRegistro(db, req.user, req.body || {});
+    res.json({ ok: true, credential: cred });
+  } catch (e) {
+    res.status(400).json({ error: e.message || 'No se pudo registrar la huella.' });
+  }
+});
+
+router.post('/auth/webauthn/login/options', loginRateLimit, async (req, res) => {
+  const { email } = req.body || {};
+  if (!validEmail(email)) return res.status(400).json({ error: 'Pon tu email para entrar con huella.' });
+  const r = await webauthn.crearOpcionesLogin(db, String(email).trim().toLowerCase());
+  if (!r) return res.status(404).json({ error: 'No hay ninguna huella registrada para ese email. Entra con tu contraseña.' });
+  res.json({ options: r.options });
+});
+
+router.post('/auth/webauthn/login/verify', loginRateLimit, async (req, res) => {
+  try {
+    const user = await webauthn.verificarLogin(db, req.body || {});
+    if (user.active === false) return res.status(403).json({ error: 'Tu cuenta está desactivada. Habla con el administrador.' });
+    const pub = db.publicUser(user);
+    return res.json({ token: signToken(pub), user: pub });
+  } catch (e) {
+    return res.status(400).json({ error: e.message || 'No se pudo entrar con huella.' });
+  }
+});
+
+// Huellas registradas en este usuario (sin claves públicas: solo id,
+// transports y fechas, para mostrarlas en la pantalla).
+router.get('/auth/webauthn/credentials', auth, async (req, res) => {
+  const creds = await db.listWebauthnCredentials(req.user.id);
+  res.json({
+    credentials: creds.map((c) => ({
+      credentialId: c.credential_id,
+      transports: Array.isArray(c.transports) ? c.transports : [],
+      createdAt: c.created_at || null,
+      lastUsedAt: c.last_used_at || null,
+    })),
+  });
+});
+
 router.post('/auth/logout', auth, (req, res) => res.json({ ok: true }));
 
 // --- Datos del usuario (cartera virtual / alertas en la cuenta) ---
@@ -395,6 +473,31 @@ router.post('/kalshi/live/enable', auth, async (req, res) => {
   if (!conn) return res.status(400).json({ error: 'Conecta primero tu cuenta Kalshi: sin credenciales no hay nada que firmar.' });
   const snap = await liveTrader.arm(req.user.id);
   res.json({ ok: true, ...snap, kalshiConnected: true });
+});
+
+// v16.4 Parte 2 — EXPERIMENTO LIVE ACOTADO (decidido por Luis,
+// 18-nov-2026). Activa/desactiva el modo experimento del trader:
+// 1 contrato por orden y tope de $5 USD de notional por orden (el
+// default global sigue siendo 2 contratos, sin tope). NO enciende
+// live ni arma nada: solo cambia los límites que verificarLimites
+// aplicará CUANDO live esté encendido y armado. Sin pagos, sin plan
+// Starter de Render: Luis despierta la web él mismo cuando se duerme.
+// Marco de Luis: la web es el producto que le dará dinero; el bot es
+// un experimento acotado al lado, no el negocio.
+router.post('/kalshi/live/experiment', auth, async (req, res) => {
+  const body = req.body || {};
+  try {
+    const snap = await liveTrader.setExperiment(req.user.id, {
+      experimentMode: body.experimentMode === true,
+      contractsPerOrder: body.contractsPerOrder,
+      maxNotionalUsdPerOrder: body.maxNotionalUsdPerOrder,
+      maxOrdersPerDay: body.maxOrdersPerDay,
+    });
+    const conn = await db.getKalshiConnection(req.user.id);
+    res.json({ ok: true, ...snap, kalshiConnected: !!conn });
+  } catch (e) {
+    res.status(400).json({ error: e.message || 'Configuración de experimento no válida.' });
+  }
 });
 
 const posCache = new Map(); // userId -> {at, data}

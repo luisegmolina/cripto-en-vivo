@@ -17,6 +17,9 @@ function setToken(token) {
   } catch { /* almacenamiento no disponible: la sesión solo vive en memoria */ }
 }
 
+// v16.4 — guarda el token tras un login con huella (webauthn.js).
+export function saveToken(token) { setToken(token); }
+
 export function clearToken() { setToken(null); }
 
 // Llamada autenticada al contrato v12. Añade `Authorization: Bearer <token>`

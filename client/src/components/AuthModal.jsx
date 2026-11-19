@@ -3,7 +3,12 @@
 // tu Kalshi para ver el valor BRTI en vivo y tus posiciones (solo
 // lectura mientras el bot en vivo §7 esté apagado; hoy está apagado).
 // Solo presenta: el envío y el estado viven en App.jsx.
-export default function AuthModal({ showAuth, authName, onAuthName, authEmail, onAuthEmail, authPassword, onAuthPassword, authBusy, authError, onSubmit, onClose, onSwitchMode }) {
+// v16.4: en modo login, botón "Entrar con huella / rostro" (WebAuthn,
+// autenticador de plataforma). Solo se muestra si el navegador y el
+// dispositivo lo admiten (webauthnAvailable); si no, se muestra
+// deshabilitado con una explicación corta. El registro de la huella
+// vive en WebauthnRegister.jsx (con sesión iniciada).
+export default function AuthModal({ showAuth, authName, onAuthName, authEmail, onAuthEmail, authPassword, onAuthPassword, authBusy, authError, onSubmit, onClose, onSwitchMode, webauthnAvailable, onWebauthnLogin, webauthnBusy, webauthnError }) {
   return (
     <section className="card">
       <h2>{showAuth === 'register' ? 'Crear cuenta' : 'Entrar'}</h2>
@@ -20,6 +25,20 @@ export default function AuthModal({ showAuth, authName, onAuthName, authEmail, o
         </div>
       </form>
       {authError && <p className="error">{authError}</p>}
+      {showAuth === 'login' && (
+        <div>
+          <div className="row">
+            <button type="button" disabled={!webauthnAvailable || webauthnBusy || authBusy} onClick={onWebauthnLogin}>
+              {webauthnBusy ? '…' : 'Entrar con huella / rostro'}
+            </button>
+          </div>
+          {!webauthnAvailable && (
+            <p className="muted">Tu navegador o dispositivo no tiene huella ni rostro disponible para entrar sin contraseña: usa tu email y contraseña.</p>
+          )}
+          {webauthnError && <p className="error">{webauthnError}</p>}
+          <p className="muted">La huella solo funciona si ya la registraste en este dispositivo (con sesión iniciada, en «Mi cuenta»).</p>
+        </div>
+      )}
       <p className="muted">
         {showAuth === 'login' ? (
           <>¿No tienes cuenta? <button onClick={() => onSwitchMode('register')}>Crear cuenta</button></>

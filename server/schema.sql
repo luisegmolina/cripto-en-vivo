@@ -45,5 +45,19 @@ ALTER TABLE cev_user_data ADD CONSTRAINT cev_user_data_kind_check CHECK (kind IN
 -- v16.3: kinds 'paper_audit_settings' (flag autostart del auditor) y
 -- 'cev_paper_windows' (historial sin tope de ventanas liquidadas,
 -- registros compactos). Misma migración de arriba.
+-- v16.4 — Credenciales WebAuthn / passkeys (huella o rostro). Solo la
+-- CLAVE PÚBLICA (base64url) + contador + transports: la clave privada
+-- nunca sale del dispositivo del usuario. El contador crece en cada
+-- login y delata replays o clones. El servidor también crea esta tabla
+-- al arrancar (db.js SCHEMA, CREATE TABLE IF NOT EXISTS).
+CREATE TABLE IF NOT EXISTS cev_webauthn_credentials (
+  credential_id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES cev_users(id) ON DELETE CASCADE,
+  public_key TEXT NOT NULL,
+  counter BIGINT NOT NULL DEFAULT 0,
+  transports JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_used_at TIMESTAMPTZ
+);
 
 CREATE INDEX IF NOT EXISTS cev_users_email_idx ON cev_users (email);

@@ -8,6 +8,7 @@ import { window15m, fmtCountdown, kalshiVerdictForScore, estimatedProb, adjustPr
 import { shouldFireAlert, shouldSignalAlert, dedupePriceAlerts } from './alerts.js';
 import { APP_URL } from './shareCard.js';
 import { getToken, register, login, me, logout, apiAuth } from './auth.js';
+import { webauthnLogin, isPlatformAuthenticatorAvailable } from './webauthn.js';
 import AdminPanel from './AdminPanel.jsx';
 import LiveReference from './components/LiveReference.jsx';
 import MyPosition from './components/MyPosition.jsx';
@@ -21,7 +22,7 @@ import AuthModal from './components/AuthModal.jsx';
 
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v16.3 — Arranque auto + watchdog + historial';
+const VERSION_LABEL = 'v16.4 — Entrada biométrica + experimento live (apagado)';
 
 function visibleInterval(fn, ms) {
   const t = setInterval(() => { if (!document.hidden) fn(); }, ms);
@@ -114,6 +115,17 @@ export default function App() {
   const [authName, setAuthName] = useState('');
   const [authError, setAuthError] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
+  // v16.4 — entrada con huella / rostro (WebAuthn): si el navegador y
+  // el dispositivo lo admiten, el modal muestra el botón; si no, lo
+  // muestra deshabilitado con la explicación.
+  const [webauthnAvailable, setWebauthnAvailable] = useState(false);
+  const [webauthnBusy, setWebauthnBusy] = useState(false);
+  const [webauthnError, setWebauthnError] = useState('');
+  useEffect(() => {
+    let vivo = true;
+    isPlatformAuthenticatorAvailable().then((v) => { if (vivo) setWebauthnAvailable(v === true); }).catch(() => {});
+    return () => { vivo = false; };
+  }, []);
   const serverSyncDone = useRef(false);
 
   async function pullOrPushServerData() {
@@ -185,6 +197,26 @@ export default function App() {
     setUser(null);
     serverSyncDone.current = false;
     goApp();
+  }
+
+  // v16.4 — entrar con huella / rostro (WebAuthn). Hace falta el email
+  // en el modal (el servidor busca las credenciales por email). Devuelve
+  // la misma sesión JWT que el login con password.
+  async function handleWebauthnLogin() {
+    setWebauthnError('');
+    if (!authEmail.trim()) { setWebauthnError('Pon tu email primero para entrar con huella.'); return; }
+    setWebauthnBusy(true);
+    try {
+      const data = await webauthnLogin(authEmail.trim());
+      setTokenState(getToken());
+      setUser(data.user || null);
+      setShowAuth(null);
+      setAuthPassword('');
+      setAuthName('');
+      serverSyncDone.current = false;
+      pullOrPushServerData();
+    } catch (err) { setWebauthnError(err.message || 'No se pudo entrar con huella.'); }
+    finally { setWebauthnBusy(false); }
   }
 
   const [markets, setMarkets] = useState([]);
@@ -644,7 +676,7 @@ export default function App() {
       </header>
 
       {showAuth && (
-        <AuthModal showAuth={showAuth} authName={authName} onAuthName={setAuthName} authEmail={authEmail} onAuthEmail={setAuthEmail} authPassword={authPassword} onAuthPassword={setAuthPassword} authBusy={authBusy} authError={authError} onSubmit={handleAuthSubmit} onClose={() => setShowAuth(null)} onSwitchMode={(m) => { setShowAuth(m); setAuthError(''); }} />
+        <AuthModal showAuth={showAuth} authName={authName} onAuthName={setAuthName} authEmail={authEmail} onAuthEmail={setAuthEmail} authPassword={authPassword} onAuthPassword={setAuthPassword} authBusy={authBusy} authError={authError} onSubmit={handleAuthSubmit} onClose={() => setShowAuth(null)} onSwitchMode={(m) => { setShowAuth(m); setAuthError(''); }} webauthnAvailable={webauthnAvailable} onWebauthnLogin={handleWebauthnLogin} webauthnBusy={webauthnBusy} webauthnError={webauthnError} />
       )}
 
       <p className="warn">⚠️ Prueba educativa, dinero virtual: con el bot en vivo APAGADO (§7), la app nunca opera por ti. Si lo enciendes y lo armas, sí puede enviar órdenes en Kalshi. Kalshi liquida con el índice BRTI (promedio de 60 s), no con Coinbase.</p>

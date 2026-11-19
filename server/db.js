@@ -57,6 +57,19 @@ CREATE TABLE IF NOT EXISTS cev_user_data (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (user_id, kind)
 );
+-- v16.4 — Credenciales WebAuthn / passkeys (huella o rostro del
+-- dispositivo). Solo se guarda la CLAVE PÚBLICA (base64url) + contador
+-- + transports: la clave privada NUNCA sale del dispositivo. El
+-- contador crece en cada login y delata replays o clones.
+CREATE TABLE IF NOT EXISTS cev_webauthn_credentials (
+  credential_id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES cev_users(id) ON DELETE CASCADE,
+  public_key TEXT NOT NULL,
+  counter BIGINT NOT NULL DEFAULT 0,
+  transports JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_used_at TIMESTAMPTZ
+);
 CREATE INDEX IF NOT EXISTS cev_users_email_idx ON cev_users (email);
 ALTER TABLE cev_users ADD COLUMN IF NOT EXISTS token_valid_after TIMESTAMPTZ;`;
 
@@ -65,7 +78,7 @@ function fileLoad() {
   try {
     fileDb = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
   } catch {
-    fileDb = { seq: 1, users: [], kalshi: {}, data: {} };
+    fileDb = { seq: 1, users: [], kalshi: {}, data: {}, webauthn: {} };
   }
   return fileDb;
 }
@@ -238,6 +251,84 @@ async function setKalshiLastSync(userId, status) {
   return true;
 }
 
+// v16.4 — Credenciales WebAuthn / passkeys. La clave pública se
+// guarda en base64url; la privada nunca sale del dispositivo.
+// En modo archivo viven en db.webauthn (clave: credential_id).
+function _normCred(row) {
+  if (!row) return null;
+  return {
+    credential_id: row.credential_id,
+    user_id: Number(row.user_id),
+    public_key: row.public_key,
+    counter: Number(row.counter) || 0,
+    transports: Array.isArray(row.transports) ? row.transports : [],
+    created_at: row.created_at || row.createdAt || null,
+    last_used_at: row.last_used_at || row.lastUsedAt || null,
+  };
+}
+
+async function addWebauthnCredential({ userId, credentialId, publicKey, counter, transports }) {
+  const n = Number(userId);
+  const tr = Array.isArray(transports) ? transports : [];
+  if (hasPg) {
+    await pool.query(
+      `INSERT INTO cev_webauthn_credentials (credential_id, user_id, public_key, counter, transports)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (credential_id) DO NOTHING`,
+      [String(credentialId), n, String(publicKey), Number(counter) || 0, JSON.stringify(tr)]);
+    return true;
+  }
+  const db = fileLoad();
+  db.webauthn = db.webauthn || {};
+  if (db.webauthn[String(credentialId)]) return false;
+  db.webauthn[String(credentialId)] = {
+    credential_id: String(credentialId), user_id: n, public_key: String(publicKey),
+    counter: Number(counter) || 0, transports: tr,
+    created_at: new Date().toISOString(), last_used_at: null,
+  };
+  fileSave();
+  return true;
+}
+
+async function listWebauthnCredentials(userId) {
+  const n = Number(userId);
+  if (hasPg) {
+    const r = await pool.query('SELECT * FROM cev_webauthn_credentials WHERE user_id = $1 ORDER BY created_at ASC', [n]);
+    return r.rows.map(_normCred);
+  }
+  const db = fileLoad();
+  db.webauthn = db.webauthn || {};
+  return Object.values(db.webauthn).filter((c) => Number(c.user_id) === n).map(_normCred);
+}
+
+async function getWebauthnCredentialById(credentialId) {
+  const id = String(credentialId || '');
+  if (hasPg) {
+    const r = await pool.query('SELECT * FROM cev_webauthn_credentials WHERE credential_id = $1', [id]);
+    return _normCred(r.rows[0]);
+  }
+  const db = fileLoad();
+  db.webauthn = db.webauthn || {};
+  return _normCred(db.webauthn[id]);
+}
+
+async function updateWebauthnCounter(credentialId, counter) {
+  const id = String(credentialId || '');
+  const c = Number(counter) || 0;
+  if (hasPg) {
+    await pool.query('UPDATE cev_webauthn_credentials SET counter = $2, last_used_at = NOW() WHERE credential_id = $1', [id, c]);
+    return true;
+  }
+  const db = fileLoad();
+  db.webauthn = db.webauthn || {};
+  const row = db.webauthn[id];
+  if (!row) return false;
+  row.counter = c;
+  row.last_used_at = new Date().toISOString();
+  fileSave();
+  return true;
+}
+
 async function getUserData(userId, kind) {
   const n = Number(userId);
   if (hasPg) {
@@ -268,4 +359,5 @@ module.exports = {
   setUserActive, setUserPassword, setUserRole, countAdmins, setKalshiConnection,
   getKalshiConnection, deleteKalshiConnection, setKalshiLastSync,
   getUserData, setUserData,
+  addWebauthnCredential, listWebauthnCredentials, getWebauthnCredentialById, updateWebauthnCounter,
 };
