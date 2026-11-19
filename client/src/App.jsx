@@ -25,7 +25,7 @@ import { siteGateStatus, onSiteGateLocked, emitSiteGateLocked } from './siteGate
 
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v16.8 — Regla 1 con tiempo restante';
+const VERSION_LABEL = 'v16.9 — Entradas del trader en vivo';
 
 function visibleInterval(fn, ms) {
   const t = setInterval(() => { if (!document.hidden) fn(); }, ms);

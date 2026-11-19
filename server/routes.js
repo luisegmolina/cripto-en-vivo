@@ -80,6 +80,9 @@ liveTrader.setBalanceProvider(async (userId) => {
   }
 });
 liveTrader.ensureObservador();
+// v16.9 — El vivo se alimenta del trader continuo en papel: su
+// observador espeja cada ultimaEntrada (ensureTraderObserver).
+liveTrader.ensureTraderObserver();
 
 const router = express.Router();
 
@@ -573,6 +576,9 @@ router.post('/kalshi/paper-trader/start', auth, async (req, res) => {
   brti.ensureBrti(req.user.id, { keyId: conn.keyId, privateKeyPem });
   const prev = await db.getUserData(req.user.id, 'cev_paper_trades').catch(() => null);
   const snap = paperTrader.startTrader(req.user.id, prev || null);
+  // v16.9 — Re-arma el observador del trader si se había apagado
+  // (el observador se apaga solo sin traders activos).
+  liveTrader.ensureTraderObserver();
   res.json({ ok: true, ...snap, kalshiConnected: true });
 });
 
@@ -584,8 +590,8 @@ router.post('/kalshi/paper-trader/stop', auth, async (req, res) => {
 
 // v16.2 — BOT EN VIVO (APAGADO por defecto). Ninguna de estas rutas
 // envía órdenes directamente: las órdenes solo salen desde
-// liveTrader.handleViableSignal al evaluar una señal viable del
-// auditor. LIVE_TRADING_ENABLED='true' en el servidor es el
+// liveTrader.handleViableSignal (v16.9: alimentado por las entradas
+// del trader continuo, no por el auditor). LIVE_TRADING_ENABLED='true' en el servidor es el
 // interruptor global; sin ella, enable devuelve 403 y todo queda en
 // would-send. El kill switch (POST /kalshi/live/kill) está siempre
 // disponible y es persistente.

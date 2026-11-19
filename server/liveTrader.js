@@ -72,9 +72,26 @@
 // señal viable UNA sola vez por ticker (dedup en memoria + registro
 // persistido). Se apaga solo cuando ya no queda ningún auditor activo.
 // NO modifica paperAuditor.js: solo lee sus snapshots.
+//
+// v16.9 — EL VIVO YA NO LO ALIMENTA EL AUDITOR. El auditor sigue
+// midiendo en papel (sus señales ya no llegan a handleViableSignal:
+// ensureObservador quedó SOLO para conciliar liquidaciones), y las
+// entradas en vivo vienen DEL TRADER CONTINUO: ensureTraderObserver
+// lee cada segundo `ultimaEntrada` del snapshot de paperTrader y la
+// espeja con handleTraderEntry (mismas guardas del trader: 1
+// contrato, notional ≤ $5, EV neto > $0.015, quote fresca ≤ 5 s,
+// más los límites duros de siempre — armado, kill, órdenes/día,
+// pérdida diaria, saldo — dentro de handleViableSignal).
+// NO HAY SALIDAS EN VIVO: si el vivo entra, aguanta hasta
+// liquidación; las salidas continuas del trader existen SOLO en
+// papel (paperTrader.js). El vivo nunca vende ni cierra nada.
 const { BASE, signHeaders, kalshiGet } = require('./kalshiServer');
 const { construirPayloadOrdenV2 } = require('./paperAuditor');
 const paperAuditor = require('./paperAuditor');
+const paperTrader = require('./paperTrader');
+const {
+  QTY_POR_ORDEN, MAX_NOTIONAL_USD, MIN_EV_USD, QUOTE_FRESCA_MS,
+} = require('./traderEval');
 
 // --- Interruptor global y límites ---
 
@@ -235,6 +252,24 @@ function verificarLimites(estado, senal, opts = {}) {
   if (Number.isFinite(balanceUsd) && balanceUsd < perdida) return { ok: false, reason: 'insufficient_balance' };
   if (estado.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) return { ok: false, reason: 'max_consecutive_errors' };
   return { ok: true, reason: null, perdidaPotencialUsd: perdida, notionalUsd };
+}
+
+// v16.9 — Límites DEL TRADER para una entrada en vivo (defense-
+// in-depth, antes de delegar en handleViableSignal). Función pura.
+// El camino real no puede fallar aquí (qty=1, ask<1, EV ya
+// comprobado por evaluarEntrada del trader), pero la guarda existe
+// igual: si algo llega raro, se bloquea sin loguear. Reglas, en
+// orden: qty === 1; 0 < ask < 1; notional (qty×ask) ≤ $5; EV×qty
+// > $0.015. Usa las constantes de traderEval, no números mágicos.
+function verificarLimitesTrader({ qty, ask, ev } = {}) {
+  const q = Number(qty);
+  if (!Number.isFinite(q) || q !== QTY_POR_ORDEN) return { ok: false, reason: 'bad_quantity' };
+  const a = Number(ask);
+  if (!Number.isFinite(a) || a <= 0 || a >= 1) return { ok: false, reason: 'bad_numbers' };
+  if (q * a > MAX_NOTIONAL_USD) return { ok: false, reason: 'max_notional_per_order' };
+  const e = Number(ev);
+  if (!Number.isFinite(e) || e * q <= MIN_EV_USD) return { ok: false, reason: 'ev_bajo' };
+  return { ok: true, reason: null };
 }
 
 // Decisión pura sobre una señal viable. NUNCA toca la red.
@@ -659,6 +694,53 @@ function realizedPnlHoy(est) {
   return hay ? +suma.toFixed(4) : 0;
 }
 
+// v16.9 — Espeja en vivo UNA entrada del trader continuo
+// (paperTrader.ultimaEntrada). Es, junto con handleViableSignal, el
+// único camino hacia un envío real. Pasos, en orden:
+//   (a) validar números (ticker, lado yes/no, ask 0<ask<1, fee ≥0);
+//   (b) quote fresca (quoteFetchedAt ≤ QUOTE_FRESCA_MS, 5 s);
+//   (c) verificarLimitesTrader (defense-in-depth: 1 contrato,
+//       notional ≤ $5, EV > $0.015);
+//   (d) construir la señal con forma de auditor (fuente 'trader',
+//       viable = EV neto > $0.015 ya comprobado por evaluarEntrada)
+//       y delegar en handleViableSignal, que aplica el resto de
+//       guardas (armado, kill, límites duros, saldo) y decide.
+// Los rechazos de (a)-(c) devuelven ignore/blocked SIN loguear:
+// no hay entrada en el registro porque no hubo señal que procesar.
+// `deps.ahoraMs` opcional (default Date.now()) para tests; el resto
+// de deps se pasa tal cual a handleViableSignal.
+async function handleTraderEntry(userId, entrada, deps = {}) {
+  const ahoraMs = Number.isFinite(deps.ahoraMs) ? deps.ahoraMs : Date.now();
+  const ticker = entrada && entrada.ticker;
+  const lado = entrada && entrada.lado;
+  const ask = Number(entrada && entrada.ask);
+  const fee = Number(entrada && entrada.fee);
+  if (!ticker || (lado !== 'yes' && lado !== 'no')
+    || !Number.isFinite(ask) || ask <= 0 || ask >= 1
+    || !Number.isFinite(fee) || fee < 0) {
+    return { action: 'ignore', reason: 'bad_numbers' };
+  }
+  const quoteFetchedAt = entrada.quoteFetchedAt;
+  if (quoteFetchedAt == null || (ahoraMs - Number(quoteFetchedAt)) > QUOTE_FRESCA_MS) {
+    return { action: 'ignore', reason: 'quote_desactualizada' };
+  }
+  const lim = verificarLimitesTrader({ qty: QTY_POR_ORDEN, ask, ev: entrada.ev });
+  if (!lim.ok) return { action: 'blocked', reason: lim.reason };
+  const simulacion = {
+    ticker,
+    direccionElegida: lado,
+    askPriceDollars: ask,
+    feePerContractDollars: fee,
+    contractsQty: QTY_POR_ORDEN,
+    viableDespuesDeComision: true, // v16.9: para entradas del trader, "viable" = EV neto > $0.015 (ya comprobado por evaluarEntrada del trader)
+    ordenV2Preview: construirPayloadOrdenV2(ticker, lado, ask, QTY_POR_ORDEN),
+    fuente: 'trader',
+    evEstimada: entrada.ev,
+    pEstimada: entrada.p,
+  };
+  return handleViableSignal(userId, simulacion, deps);
+}
+
 // Procesa UNA señal viable del auditor. Es el único camino hacia un
 // envío real. Dedup por ticker: una ventana se procesa una sola vez.
 // `deps` permite inyectar stubs en pruebas: { credsProvider, sendFn }.
@@ -687,6 +769,9 @@ async function handleViableSignal(userId, simulacion, deps = {}) {
     perdidaPotencialUsd: decision.perdidaPotencialUsd != null ? decision.perdidaPotencialUsd : null,
     notionalUsd: decision.notionalUsd != null ? decision.notionalUsd : null,
     payloadPreview: simulacion.ordenV2Preview || null,
+    fuente: simulacion.fuente || 'auditor',
+    evEstimada: simulacion.evEstimada != null ? simulacion.evEstimada : null,
+    pEstimada: simulacion.pEstimada != null ? simulacion.pEstimada : null,
     orderId: null,
     clientOrderId: null,
     fillStatus: null,
@@ -843,8 +928,37 @@ async function handleViableSignal(userId, simulacion, deps = {}) {
   return entry;
 }
 
-// --- Observador del auditor (modo sombra cuando live está apagado) ---
+// v16.9 — Conciliación de liquidaciones, extraída de
+// ensureObservador para reutilizarla desde los dos observadores.
+// Lee los resultados del auditor en papel y registra el resultado
+// realizado de cada entrada 'sent' sin resultado cuya ventana ya
+// liquidó (resultado oficial distinto de 'pendiente'). Best-effort:
+// un fallo aquí no tumba ningún observador ni ningún envío. Solo
+// lee y registra: nunca envía órdenes.
+async function revisarLiquidaciones(userId) {
+  try {
+    const snap = paperAuditor.getSnapshot(userId);
+    const liquidadas = (snap && Array.isArray(snap.resultados) ? snap.resultados : [])
+      .filter((r) => r && r.ticker && r.resultadoOficialKalshi && r.resultadoOficialKalshi !== 'pendiente');
+    if (!liquidadas.length) return;
+    const est = traders.get(userId);
+    if (!est) return;
+    for (const e of est.log) {
+      if (!e || e.action !== 'sent' || e.resultadoRealizado) continue;
+      const reg = liquidadas.find((r) => r.ticker === e.ticker);
+      if (reg) registrarLiquidacion(userId, { ticker: e.ticker, resultadoOficial: reg.resultadoOficialKalshi }).catch(() => {});
+    }
+  } catch { /* best-effort */ }
+}
 
+// --- Observador del auditor (modo sombra cuando live está apagado) ---
+//
+// v16.9 — EL AUDITOR YA NO ALIMENTA AL VIVO. ensureObservador quedó
+// SOLO para conciliar liquidaciones (revisarLiquidaciones): el
+// bloque que leía snap.simulacion y llamaba handleViableSignal se
+// ELIMINÓ. Las entradas en vivo vienen del trader
+// (ensureTraderObserver + handleTraderEntry); el auditor sigue
+// midiendo en papel, sin tocarlo.
 function ensureObservador() {
   if (observadorInterval) return;
   observadorInterval = setInterval(() => {
@@ -852,35 +966,41 @@ function ensureObservador() {
     for (const [userId, aud] of paperAuditor._auditors) {
       if (!aud || !aud.enabled) continue;
       alguno = true;
-      const snap = paperAuditor.getSnapshot(userId);
-      // v16.4 Parte 2 — Liquidación: si el auditor ya liquidó la
-      // ventana de una orden enviada (resultado oficial distinto de
-      // 'pendiente'), se registra su resultado realizado. Best-effort:
-      // un fallo aquí no tumba el observador ni el envío.
-      try {
-        const liquidadas = (snap && Array.isArray(snap.resultados) ? snap.resultados : [])
-          .filter((r) => r && r.ticker && r.resultadoOficialKalshi && r.resultadoOficialKalshi !== 'pendiente');
-        if (liquidadas.length) {
-          const est = traders.get(userId);
-          if (est) {
-            for (const e of est.log) {
-              if (!e || e.action !== 'sent' || e.resultadoRealizado) continue;
-              const reg = liquidadas.find((r) => r.ticker === e.ticker);
-              if (reg) registrarLiquidacion(userId, { ticker: e.ticker, resultadoOficial: reg.resultadoOficialKalshi }).catch(() => {});
-            }
-          }
-        }
-      } catch { /* best-effort */ }
-      const sim = snap && snap.simulacion;
-      if (!sim || sim.viableDespuesDeComision !== true) continue;
-      const clave = `${userId}:${sim.ticker}`;
-      if (procesando.has(clave)) continue;
-      procesando.add(clave);
-      handleViableSignal(userId, sim).catch(() => {}).finally(() => procesando.delete(clave));
+      revisarLiquidaciones(userId).catch(() => {});
     }
     if (!alguno && observadorInterval) { clearInterval(observadorInterval); observadorInterval = null; }
   }, 1000);
   if (observadorInterval.unref) observadorInterval.unref();
+}
+
+// v16.9 — OBSERVADOR DEL TRADER: el único feed de entradas en vivo.
+// Un setInterval global de 1 s (perezoso, con unref, mismo patrón
+// que ensureObservador) que recorre los traders en papel habilitados
+// y espeja cada `ultimaEntrada` UNA sola vez por ticker (dedup en
+// `procesando` + el dedup por ticker de handleViableSignal). Se apaga
+// solo cuando ya no queda ningún trader activo. NO modifica
+// paperTrader.js: solo lee sus snapshots.
+let observadorTraderInterval = null;
+
+function ensureTraderObserver() {
+  if (observadorTraderInterval) return;
+  observadorTraderInterval = setInterval(() => {
+    let alguno = false;
+    for (const [userId, est] of paperTrader._traders) {
+      if (!est || !est.enabled) continue;
+      alguno = true;
+      revisarLiquidaciones(userId).catch(() => {});
+      const snap = paperTrader.getSnapshot(userId);
+      const entrada = snap && snap.ultimaEntrada;
+      if (!entrada || !entrada.ticker) continue;
+      const clave = `${userId}:${entrada.ticker}`;
+      if (procesando.has(clave)) continue;
+      procesando.add(clave);
+      handleTraderEntry(userId, entrada, { ahoraMs: Date.now() }).catch(() => {}).finally(() => procesando.delete(clave));
+    }
+    if (!alguno && observadorTraderInterval) { clearInterval(observadorTraderInterval); observadorTraderInterval = null; }
+  }, 1000);
+  if (observadorTraderInterval.unref) observadorTraderInterval.unref();
 }
 
 module.exports = {
@@ -893,6 +1013,7 @@ module.exports = {
   consultarOrdenKalshi, conciliarOrdenEnviada, calcularResultadoRealizado, registrarLiquidacion,
   setPersistencia, setCredentialsProvider, setCargarEstado, setSendFn, setBalanceProvider,
   cargarEstadoSiHaceFalta, getSnapshot, kill, arm, handleViableSignal,
+  handleTraderEntry, ensureTraderObserver, verificarLimitesTrader,
   ensureObservador,
   // Solo para pruebas: inspeccionar el estado en memoria.
   _traders: traders,

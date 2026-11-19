@@ -74,9 +74,9 @@ check('LiveTrader.jsx: ya no hay título fijo "7 · Bot en vivo — APAGADO"',
 check('LiveTrader.jsx: el badge estadoTxt sigue intacto (APAGADO / DETENIDO / ARMADO / sin armar)',
   liveTraderJsx.includes("const estadoTxt = !live ? '⛔ APAGADO — no envía órdenes'")
   && liveTraderJsx.includes("'● ARMADO — puede enviar órdenes'"));
-check('LiveTrader.jsx: aviso ARMADO dice que la próxima señal viable enviará una orden REAL, con los límites vigentes interpolados',
+check('LiveTrader.jsx: aviso ARMADO dice que la próxima entrada del trader (EV) enviará una orden REAL, con los límites vigentes interpolados',
   liveTraderJsx.includes('live && armed && !killed')
-  && liveTraderJsx.includes('la próxima señal viable del auditor enviará una orden REAL')
+  && liveTraderJsx.includes('la próxima entrada del trader (EV) enviará una orden REAL')
   && liveTraderJsx.includes('máx. {limits.maxContractsPerOrder} contratos por orden')
   && liveTraderJsx.includes('máx. {limits.maxOrdersPerDay} órdenes/día')
   && liveTraderJsx.includes('pérdida potencial máx. ${fmtNum(limits.maxDailyLossUsd)}/día'));
@@ -92,10 +92,10 @@ check('LiveTrader.jsx: sondeo, botones y registro intactos (status cada 2 s, kil
   && liveTraderJsx.includes('disabled={busy || !user || !live || armed}'));
 
 console.log('v16.7 — 4. Versión, motor intacto, live apagado');
-check("VERSION_LABEL es 'v16.7 — PIN del dueño y §7 dinámico'",
-  appJsx.includes("const VERSION_LABEL = 'v16.7 — PIN del dueño y §7 dinámico';"));
-check('VERSION.txt empieza en v16.7 y la nota de v16.6 ya dice DESPLEGADA (no "solo en local")',
-  versionTxt.startsWith('v16.7') && versionTxt.includes('DESPLEGADA en Render (commit b579569b)')
+check("VERSION_LABEL es 'v16.9 — Entradas del trader en vivo' (actualizado por diseño en v16.9)",
+  appJsx.includes("const VERSION_LABEL = 'v16.9 — Entradas del trader en vivo';"));
+check('VERSION.txt empieza en v16.9 y la nota de v16.6 ya dice DESPLEGADA (no "solo en local")',
+  versionTxt.startsWith('v16.9') && versionTxt.includes('DESPLEGADA en Render (commit b579569b)')
   && !versionTxt.includes('v16.6 — Trader continuo en papel (entrada y salida), solo en local, sin desplegar'));
 check('el motor no menciona el trader ni la puerta (kalshi.js, analysis.js, verdict.js, windowOutcome.js)',
   motor.every((m) => !m.includes('paperTrader') && !m.includes('paper-trader')

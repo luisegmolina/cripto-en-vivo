@@ -373,8 +373,8 @@ check('paperAuditor.js no lee la env LIVE_TRADING_ENABLED en código (solo la me
   !auditorSrc.includes('process.env.LIVE_TRADING_ENABLED') && auditorSrc.includes('// EN PAPEL; sin la env LIVE_TRADING_ENABLED y sin armar, no sale'));
 check('live sigue APAGADO por defecto (isLiveEnabled false sin la env)',
   trader.isLiveEnabled() === false);
-check("VERSION_LABEL es 'v16.7 — PIN del dueño y §7 dinámico' (actualizado por diseño en v16.7)",
-  app.includes("const VERSION_LABEL = 'v16.7 — PIN del dueño y §7 dinámico';"));
+check("VERSION_LABEL es 'v16.9 — Entradas del trader en vivo' (actualizado por diseño en v16.9)",
+  app.includes("const VERSION_LABEL = 'v16.9 — Entradas del trader en vivo';"));
 check('VERSION.txt documenta la v16.3 con sus 7 puntos',
   versionTxt.includes('v16.3 — Arranque auto + watchdog + historial') && versionTxt.includes('Arranque automático') && versionTxt.includes('Watchdog'));
 

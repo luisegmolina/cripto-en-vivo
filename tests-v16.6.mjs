@@ -33,7 +33,13 @@ const sha256 = (p) => createHash('sha256').update(readFileSync(path.join(ROOT, p
 
 // Hashes ANTES del cambio (baseline 18-nov-2026): liveTrader.js y
 // paperAuditor.js no se tocan en v16.6; si alguno cambia, falla.
-const HASH_LIVE_TRADER = 'f490139913e0430d13272929646199e6b00dbe6a15bae9305a3fe00178b16b60';
+// v16.9 — RE-BASELINE del coordinador: liveTrader.js cambió POR
+// DISEÑO en v16.9 (feed del trader: handleTraderEntry,
+// ensureTraderObserver, verificarLimitesTrader; el observador del
+// francotirador ya no alimenta al vivo). Hash nuevo verificado contra
+// el contenido real (sin salidas en vivo, sin handleViableSignal en
+// ensureObservador). paperAuditor.js sigue en su baseline original.
+const HASH_LIVE_TRADER = '893ffb4a332e2f3910e4d8d28f5bc0ad759a4311dffe9eb05f4cc8013f103e8b';
 const HASH_PAPER_AUDITOR = '7bd6af9aec741b4f7e1695839f4edf77027ad40c8897210d5f4b48101452263d';
 const HASH_MOTOR = {
   'client/src/kalshi.js': '7eb7beef78e7f22d24face676aeac4455b1d9b24eedb2b345969149d6a24211b',
@@ -256,7 +262,7 @@ check('liveTrader.js intacto (sha256 del baseline)',
 check('motor del cliente intacto (kalshi.js, analysis.js, verdict.js, windowOutcome.js)',
   Object.entries(HASH_MOTOR).every(([p, h]) => sha256(p) === h));
 check('VERSION.txt está en v16.7 (el trabajo del cliente actualiza la versión)',
-  src('VERSION.txt').startsWith('v16.7'));
+  src('VERSION.txt').startsWith('v16.9'));
 check('routes.js cablea GET/POST /kalshi/paper-trader y el hook cev_paper_trades',
   routesSrc.includes("'/kalshi/paper-trader'") && routesSrc.includes('paperTrader.getSnapshot')
   && routesSrc.includes('paperTrader.startTrader') && routesSrc.includes('paperTrader.stopTrader')

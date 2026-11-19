@@ -1,13 +1,15 @@
-// LiveTrader.jsx — v16.2: §7 Bot en vivo — APAGADO por defecto.
+// LiveTrader.jsx — v16.9: §7 Bot en vivo — APAGADO por defecto.
 // Solo LEE el estado del bot (GET /api/kalshi/live/status cada 2 s)
 // y pide Detener (kill switch). NUNCA envía órdenes desde el cliente:
 // las órdenes solo salen del servidor (liveTrader) al evaluar una
-// señal viable del auditor, y solo si el interruptor global
+// entrada del trader por EV, y solo si el interruptor global
 // LIVE_TRADING_ENABLED='true' está puesto en el servidor (hoy NO lo
-// está: en Render es false). Con live apagado, cada señal viable se
-// registra como would-send: qué se HABRÍA enviado, sin enviar nada.
+// está: en Render es false). Con live apagado, cada entrada del trader
+// se registra como would-send: qué se HABRÍA enviado, sin enviar nada.
 // El botón "Armar" queda deshabilitado mientras live esté apagado;
 // el servidor devuelve 403 si se intenta igual.
+// v16.9: el vivo ya NO opera sobre señales del auditor francotirador:
+// el auditor sigue midiendo en papel (§6) pero ya no alimenta al vivo.
 import { useEffect, useState } from 'react';
 import { apiAuth } from '../auth.js';
 
@@ -125,7 +127,7 @@ export default function LiveTrader({ user, fmt }) {
       </p>
 
       <div className="row" style={{ marginTop: '10px' }}>
-        <button className="primary" disabled={busy || !user || !live || armed} onClick={() => accion('/api/kalshi/live/enable', 'Bot armado. Solo operará sobre señales viables del auditor, dentro de los límites.')}>▶ Armar bot en vivo</button>
+        <button className="primary" disabled={busy || !user || !live || armed} onClick={() => accion('/api/kalshi/live/enable', 'Bot armado. Solo operará sobre entradas del trader por EV, dentro de los límites.')}>▶ Armar bot en vivo</button>
         <button disabled={busy || !user || killed} onClick={() => accion('/api/kalshi/live/kill', 'Kill switch activado: el bot está detenido y desarmado.')}>■ Detener (kill switch)</button>
       </div>
       {!live && user && (
@@ -134,7 +136,7 @@ export default function LiveTrader({ user, fmt }) {
 
       <h3>Registro de decisiones ({log.length})</h3>
       {log.length === 0 ? (
-        <p className="muted">Aún no hay decisiones registradas. Con live apagado, cada señal viable del auditor aparecerá aquí como "HABRÍA ENVIADO", sin enviar nada.</p>
+        <p className="muted">Aún no hay decisiones registradas. Con live apagado, cada entrada del trader (EV) aparecerá aquí como "HABRÍA ENVIADO", sin enviar nada.</p>
       ) : (
         <div className="audit-table-wrap">
           <table className="audit-table">
@@ -143,6 +145,7 @@ export default function LiveTrader({ user, fmt }) {
                 <th>Hora</th>
                 <th>Ventana</th>
                 <th>Decisión</th>
+                <th>Fuente</th>
                 <th>Motivo</th>
                 <th>Lado</th>
                 <th>Ask</th>
@@ -155,6 +158,7 @@ export default function LiveTrader({ user, fmt }) {
                   <td>{e.at ? new Date(e.at).toLocaleTimeString('es-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}</td>
                   <td>{e.ticker ? e.ticker.replace('KXBTC15M-', '') : '—'}</td>
                   <td><b className={e.action === 'sent' ? 'up' : e.action === 'blocked' ? 'down' : ''}>{accionLabel(e.action)}</b></td>
+                  <td>{e.fuente || 'auditor'}</td>
                   <td>{e.reason || '—'}{e.autoKilled ? ' · auto-detenido' : ''}</td>
                   <td>{e.direccion === 'yes' ? 'SÍ' : e.direccion === 'no' ? 'NO' : '—'}</td>
                   <td className="num">{e.askPriceDollars != null ? `$${fmtNum(e.askPriceDollars, 4)}` : '—'}</td>
@@ -172,7 +176,7 @@ export default function LiveTrader({ user, fmt }) {
           con la misma precedencia que el título y el badge. */}
       {live && armed && !killed ? (
         <p className="warn">
-          ⚠️ Bot en vivo ARMADO: la próxima señal viable del auditor enviará una orden REAL en Kalshi,
+          ⚠️ Bot en vivo ARMADO: la próxima entrada del trader (EV) enviará una orden REAL en Kalshi,
           dentro de los límites vigentes: máx. {limits.maxContractsPerOrder} contratos por orden ·
           máx. {limits.maxOrdersPerDay} órdenes/día · pérdida potencial máx. ${fmtNum(limits.maxDailyLossUsd)}/día
           (peor caso, contratos a $0). El backtest honesto del motor sigue en ~46%: todavía no hay edge demostrado.
@@ -180,21 +184,21 @@ export default function LiveTrader({ user, fmt }) {
       ) : killed ? (
         <p className="warn">
           ⚠️ Bot DETENIDO por el kill switch: no envía órdenes reales ni se puede armar hasta que
-          se levante la detención. El auditor en papel (§6) sigue midiendo si la estrategia tiene ventaja.
+          se levante la detención. El trader en papel (§6) sigue midiendo si la estrategia tiene ventaja.
           El backtest honesto del motor sigue en ~46%: todavía no hay edge demostrado.
         </p>
       ) : live ? (
         <p className="warn">
           ⚠️ Bot en vivo ENCENDIDO pero SIN ARMAR: el interruptor global del servidor está encendido,
           pero el bot no enviará ninguna orden hasta que lo armes. Con live apagado o sin armar, cada
-          señal viable del auditor se registra solo como "HABRÍA ENVIADO", sin enviar nada.
+          entrada del trader (EV) se registra solo como "HABRÍA ENVIADO", sin enviar nada.
           El backtest honesto del motor sigue en ~46%: todavía no hay edge demostrado.
         </p>
       ) : (
         <p className="warn">
           ⚠️ Bot en vivo APAGADO: con la configuración actual es imposible que se envíe una orden real.
           El auditor en papel (§6) sigue midiendo si la estrategia tiene ventaja; el bot solo operará
-          cuando el interruptor global esté encendido, tú lo armes, y la señal sea viable dentro de los límites.
+          cuando el interruptor global esté encendido, tú lo armes, y una entrada del trader (EV) sea viable dentro de los límites.
           El backtest honesto del motor sigue en ~46%: todavía no hay edge demostrado.
         </p>
       )}
