@@ -255,8 +255,8 @@ check('liveTrader.js intacto (sha256 del baseline)',
   sha256('server/liveTrader.js') === HASH_LIVE_TRADER);
 check('motor del cliente intacto (kalshi.js, analysis.js, verdict.js, windowOutcome.js)',
   Object.entries(HASH_MOTOR).every(([p, h]) => sha256(p) === h));
-check('VERSION.txt está en v16.6 (el trabajo del cliente actualiza la versión)',
-  src('VERSION.txt').startsWith('v16.6'));
+check('VERSION.txt está en v16.7 (el trabajo del cliente actualiza la versión)',
+  src('VERSION.txt').startsWith('v16.7'));
 check('routes.js cablea GET/POST /kalshi/paper-trader y el hook cev_paper_trades',
   routesSrc.includes("'/kalshi/paper-trader'") && routesSrc.includes('paperTrader.getSnapshot')
   && routesSrc.includes('paperTrader.startTrader') && routesSrc.includes('paperTrader.stopTrader')

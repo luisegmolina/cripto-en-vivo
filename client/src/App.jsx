@@ -25,7 +25,7 @@ import { siteGateStatus, onSiteGateLocked, emitSiteGateLocked } from './siteGate
 
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v16.6 — Trader continuo en papel (entrada y salida)';
+const VERSION_LABEL = 'v16.7 — PIN del dueño y §7 dinámico';
 
 function visibleInterval(fn, ms) {
   const t = setInterval(() => { if (!document.hidden) fn(); }, ms);

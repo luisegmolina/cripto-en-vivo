@@ -243,17 +243,24 @@ console.log('v16.2 — 12. Persistencia live_trade_log y cableado del cliente');
 check('db.js y schema.sql admiten kind live_trade_log (CHECK + migración DROP/ADD)',
   dbSrc.includes("'live_trade_log'") && dbSrc.includes('DROP CONSTRAINT IF EXISTS cev_user_data_kind_check') &&
   schemaSql.includes("'live_trade_log'"));
-check('App.jsx monta §7 LiveTrader después de PaperAudit y antes de AccountBox, con VERSION_LABEL v16.6 (actualizado por diseño en v16.6)',
+check('App.jsx monta §7 LiveTrader después de PaperAudit y antes de AccountBox, con VERSION_LABEL v16.7 (actualizado por diseño en v16.7)',
   app.includes("import LiveTrader from './components/LiveTrader.jsx'") &&
-  app.includes("const VERSION_LABEL = 'v16.6") &&
+  app.includes("const VERSION_LABEL = 'v16.7") &&
   app.indexOf('<LiveTrader user={user} fmt={fmt} />') > app.indexOf('<PaperAudit user={user} fmt={fmt} />') &&
   app.indexOf('<LiveTrader user={user} fmt={fmt} />') < app.indexOf('<AccountBox'));
-check('LiveTrader.jsx: §7 APAGADO, sondeo status cada 2 s, botón Detener (kill), Armar deshabilitado sin live',
-  liveTraderJsx.includes('7 · Bot en vivo — APAGADO') &&
+check('LiveTrader.jsx: §7 con título dinámico según live/armed/killed (v16.7, ya no hay título fijo "APAGADO"), sondeo status cada 2 s, botón Detener (kill), Armar deshabilitado sin live',
+  liveTraderJsx.includes('7 · Bot en vivo — {tituloEstado}') &&
+  liveTraderJsx.includes("const tituloEstado = !live ? 'APAGADO'") &&
+  liveTraderJsx.includes("killed ? 'DETENIDO'") &&
+  liveTraderJsx.includes("armed ? 'ARMADO'") &&
+  !liveTraderJsx.includes('<h2>7 · Bot en vivo — APAGADO</h2>') &&
   liveTraderJsx.includes("apiAuth('/api/kalshi/live/status')") && liveTraderJsx.includes('2000') &&
   liveTraderJsx.includes("'/api/kalshi/live/kill'") && liveTraderJsx.includes('Detener (kill switch)') &&
   liveTraderJsx.includes('APAGADO — no envía órdenes') &&
-  liveTraderJsx.includes('es imposible que se envíe una orden real'));
+  liveTraderJsx.includes('es imposible que se envíe una orden real') &&
+  liveTraderJsx.includes('enviará una orden REAL') &&
+  liveTraderJsx.includes('SIN ARMAR') &&
+  liveTraderJsx.includes('DETENIDO por el kill switch'));
 check('LiveTrader.jsx no envía órdenes ni toca Kalshi directamente (solo status/kill/enable)',
   !liveTraderJsx.includes('portfolio/events/orders') && !liveTraderJsx.includes('fetch('));
 

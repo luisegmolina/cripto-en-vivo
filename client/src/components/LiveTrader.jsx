@@ -67,11 +67,16 @@ export default function LiveTrader({ user, fmt }) {
   const today = data?.today || { day: null, ordersSent: 0, potentialLossUsd: 0, consecutiveErrors: 0 };
   const log = Array.isArray(data?.log) ? data.log : [];
   const estadoTxt = !live ? '⛔ APAGADO — no envía órdenes' : killed ? '■ DETENIDO (kill switch)' : armed ? '● ARMADO — puede enviar órdenes' : '○ APAGADO (sin armar)';
+  // v16.7 — título dinámico: el título fijo "APAGADO" mentía cuando el
+  // bot estaba ENCENDIDO y ARMADO (el badge sí era dinámico). El título
+  // refleja el mismo estado real que el badge, con la misma precedencia
+  // (!live → killed → armed → sin armar).
+  const tituloEstado = !live ? 'APAGADO' : killed ? 'DETENIDO' : armed ? 'ARMADO' : 'ENCENDIDO SIN ARMAR';
 
   return (
     <section className="card">
       <div className="section-header">
-        <h2>7 · Bot en vivo — APAGADO</h2>
+        <h2>7 · Bot en vivo — {tituloEstado}</h2>
         <span className="badge">{estadoTxt}</span>
       </div>
 
@@ -161,12 +166,38 @@ export default function LiveTrader({ user, fmt }) {
         </div>
       )}
 
-      <p className="warn">
-        ⚠️ Bot en vivo APAGADO: con la configuración actual es imposible que se envíe una orden real.
-        El auditor en papel (§6) sigue midiendo si la estrategia tiene ventaja; el bot solo operará
-        cuando el interruptor global esté encendido, tú lo armes, y la señal sea viable dentro de los límites.
-        El backtest honesto del motor sigue en ~46%: todavía no hay edge demostrado.
-      </p>
+      {/* v16.7 — aviso final dinámico: el texto fijo "APAGADO ... es
+          imposible que se envíe una orden real" mentía cuando el bot
+          estaba ENCENDIDO y ARMADO. Cada estado muestra su aviso real,
+          con la misma precedencia que el título y el badge. */}
+      {live && armed && !killed ? (
+        <p className="warn">
+          ⚠️ Bot en vivo ARMADO: la próxima señal viable del auditor enviará una orden REAL en Kalshi,
+          dentro de los límites vigentes: máx. {limits.maxContractsPerOrder} contratos por orden ·
+          máx. {limits.maxOrdersPerDay} órdenes/día · pérdida potencial máx. ${fmtNum(limits.maxDailyLossUsd)}/día
+          (peor caso, contratos a $0). El backtest honesto del motor sigue en ~46%: todavía no hay edge demostrado.
+        </p>
+      ) : killed ? (
+        <p className="warn">
+          ⚠️ Bot DETENIDO por el kill switch: no envía órdenes reales ni se puede armar hasta que
+          se levante la detención. El auditor en papel (§6) sigue midiendo si la estrategia tiene ventaja.
+          El backtest honesto del motor sigue en ~46%: todavía no hay edge demostrado.
+        </p>
+      ) : live ? (
+        <p className="warn">
+          ⚠️ Bot en vivo ENCENDIDO pero SIN ARMAR: el interruptor global del servidor está encendido,
+          pero el bot no enviará ninguna orden hasta que lo armes. Con live apagado o sin armar, cada
+          señal viable del auditor se registra solo como "HABRÍA ENVIADO", sin enviar nada.
+          El backtest honesto del motor sigue en ~46%: todavía no hay edge demostrado.
+        </p>
+      ) : (
+        <p className="warn">
+          ⚠️ Bot en vivo APAGADO: con la configuración actual es imposible que se envíe una orden real.
+          El auditor en papel (§6) sigue midiendo si la estrategia tiene ventaja; el bot solo operará
+          cuando el interruptor global esté encendido, tú lo armes, y la señal sea viable dentro de los límites.
+          El backtest honesto del motor sigue en ~46%: todavía no hay edge demostrado.
+        </p>
+      )}
     </section>
   );
 }

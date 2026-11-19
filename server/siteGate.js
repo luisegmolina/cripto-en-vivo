@@ -1,5 +1,8 @@
 // PIN de acceso al sitio (v16.5) — puerta de entrada a toda la web.
-// Idea: un PIN de 4-32 caracteres que el admin pone desde su panel.
+// Idea: un PIN de 4-32 caracteres que el dueño pone desde su panel
+// (Mi cuenta). v16.7: ya no es solo admin — cualquier usuario con
+// sesión puede ponerlo/cambiarlo/quitarlo; el registro está cerrado
+// y hay un solo usuario.
 // Mientras haya PIN puesto, TODO queda bloqueado sin la cookie de
 // puerta (cev_gate_v1): las rutas /api/* (incluidas las públicas como
 // /api/kalshi-market), el estático de client/dist y el fallback SPA.
@@ -79,7 +82,8 @@ function gateCookieValid(req) {
 // Rutas que pasan siempre, haya PIN o no: salud y las tres de la
 // puerta que no exigen cookie (status, verify, recover). Todo lo
 // demás —incluidos /api/site-gate/pin y /api/site-gate/pin/remove,
-// que además exigen JWT de admin— necesita la cookie cuando hay PIN.
+// que además exigen JWT (sesión; v16.7: sin rol admin)— necesita la
+// cookie cuando hay PIN.
 const GATE_PUBLIC_PATHS = new Set(['/api/health', '/api/site-gate/status', '/api/site-gate/verify', '/api/site-gate/recover']);
 
 function gateMiddleware(db) {

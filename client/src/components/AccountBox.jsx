@@ -4,8 +4,8 @@
 // el historial. Sin sesión, solo los botones de entrar/crear cuenta.
 // v16.4: con sesión, también el registro de huella / rostro de este
 // dispositivo (WebauthnRegister.jsx).
-// v16.5: con sesión de admin, también la gestión del PIN de acceso al
-// sitio (SitePin.jsx).
+// v16.7: con sesión, también la gestión del PIN de acceso al
+// sitio (SitePin.jsx): el PIN es ajuste del dueño, sin rol admin.
 import KalshiConnect from '../KalshiConnect.jsx';
 import WebauthnRegister from './WebauthnRegister.jsx';
 import SitePin from './SitePin.jsx';
@@ -17,7 +17,7 @@ export default function AccountBox({ user, token, kalshiScore, kalshiVerdictKey,
       {user ? (
         <>
           <WebauthnRegister />
-          {user.role === 'admin' && <SitePin />}
+          <SitePin />
           <KalshiConnect token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdictKey} currentPrice={kalshiPrice} referencePrice={kalshiRefPrice} referenceSource={kalshiRefSource} currency={currency} user={user} onLogout={onLogout} active onRealDecision={onRealDecision} minimal />
         </>
       ) : (

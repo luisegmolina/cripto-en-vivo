@@ -1,5 +1,7 @@
-// SitePin.jsx — v16.5: gestión del PIN de acceso al sitio, en Mi cuenta
-// (solo admin; el servidor rechaza con 403 si no es admin). Tres
+// SitePin.jsx — v16.5: gestión del PIN de acceso al sitio, en Mi cuenta.
+// v16.7: el PIN es ajuste del dueño — cualquier usuario con sesión
+// puede ponerlo, cambiarlo o quitarlo (el registro está cerrado y hay
+// un solo usuario); el servidor ya no exige rol admin. Tres
 // acciones: poner PIN, cambiar PIN (exige el actual) y quitar PIN
 // (exige el actual). Validación en cliente: PIN de 4 a 32 caracteres,
 // con confirmación del nuevo. Al poner/cambiar, el servidor devuelve
@@ -120,7 +122,7 @@ export default function SitePin() {
 
   return (
     <div>
-      <p className="muted">Código de acceso al sitio: pon un PIN para que la web pida PIN antes de cargar. Solo el admin puede ponerlo, cambiarlo o quitarlo.</p>
+      <p className="muted">Código de acceso al sitio: pon un PIN para que la web pida PIN antes de cargar. Lo pone, cambia o quita el dueño de la cuenta (hay un solo usuario: el registro está cerrado).</p>
       <div className="row">
         <button type="button" disabled={busy} onClick={() => switchMode('set')}>Poner PIN</button>
         <button type="button" disabled={busy} onClick={() => switchMode('change')}>Cambiar PIN</button>

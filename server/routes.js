@@ -351,15 +351,17 @@ router.post('/site-gate/verify', siteGateRateLimit, async (req, res) => {
   res.json({ ok: true });
 });
 
-// Admin (JWT + rol admin): poner o cambiar el PIN. Si ya hay PIN,
-// exige el actual (401 si falla); si no hay, no lo exige. El PIN
-// nuevo necesita 4-32 caracteres. Al poner/cambiar se genera UN
-// código de recuperación nuevo: su hash se guarda y el código en
-// claro vuelve SOLO en esta respuesta (no se guarda ni se loguea).
-// También pone la cookie de puerta para no bloquear la sesión del
-// admin que lo pone. Para llegar aquí con PIN puesto hace falta la
-// cookie (la puerta la exige antes que el JWT): primero verify.
-router.post('/site-gate/pin', auth, requireAdmin, async (req, res) => {
+// v16.7 — El PIN es un ajuste del dueño: cualquier usuario con
+// sesión (JWT) puede ponerlo o cambiarlo, sin rol admin. El registro
+// está cerrado y hay un solo usuario, así que el dueño es quien entra.
+// Si ya hay PIN, exige el actual (401 si falla); si no hay, no lo
+// exige. El PIN nuevo necesita 4-32 caracteres. Al poner/cambiar se
+// genera UN código de recuperación nuevo: su hash se guarda y el
+// código en claro vuelve SOLO en esta respuesta (no se guarda ni se
+// loguea). También pone la cookie de puerta para no bloquear la sesión
+// del usuario que lo pone. Para llegar aquí con PIN puesto hace falta
+// la cookie (la puerta la exige antes que el JWT): primero verify.
+router.post('/site-gate/pin', auth, async (req, res) => {
   const { pin, currentPin } = req.body || {};
   const existingHash = await db.getSiteSetting('gate_pin_hash');
   if (existingHash) {
@@ -374,9 +376,11 @@ router.post('/site-gate/pin', auth, requireAdmin, async (req, res) => {
   res.json({ ok: true, recoveryCode });
 });
 
-// Admin (JWT + rol admin): quitar el PIN. Exige el PIN actual; borra
-// el PIN y el código de recuperación y la puerta queda abierta.
-router.post('/site-gate/pin/remove', auth, requireAdmin, async (req, res) => {
+// v16.7 — Igual que /pin: cualquier usuario con sesión puede
+// quitarlo (el PIN es ajuste del dueño, sin rol admin). Exige el PIN
+// actual; borra el PIN y el código de recuperación y la puerta queda
+// abierta.
+router.post('/site-gate/pin/remove', auth, async (req, res) => {
   const { currentPin } = req.body || {};
   const existingHash = await db.getSiteSetting('gate_pin_hash');
   if (!existingHash) return res.status(400).json({ error: 'No hay código de acceso puesto.' });

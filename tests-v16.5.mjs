@@ -94,9 +94,13 @@ check('routes.js tiene las 5 rutas del gate',
 check('routes.js: verify y recover comparten el límite 5 intentos/IP/15 min (makeRateLimiter max: 5)',
   routesSrc.includes('siteGateRateLimit') && routesSrc.includes('max: 5, windowMs: 15 * 60 * 1000')
   && (routesSrc.match(/siteGateRateLimit/g) || []).length >= 3);
-check('routes.js: /pin y /pin/remove exigen JWT de admin (auth + requireAdmin)',
-  routesSrc.includes("router.post('/site-gate/pin', auth, requireAdmin")
-  && routesSrc.includes("router.post('/site-gate/pin/remove', auth, requireAdmin"));
+check('routes.js: /pin y /pin/remove exigen JWT (auth, sin requireAdmin: el PIN es ajuste del dueño; /admin/* sigue siendo solo admin)',
+  routesSrc.includes("router.post('/site-gate/pin', auth, async")
+  && routesSrc.includes("router.post('/site-gate/pin/remove', auth, async")
+  && !routesSrc.includes("router.post('/site-gate/pin', auth, requireAdmin")
+  && !routesSrc.includes("router.post('/site-gate/pin/remove', auth, requireAdmin")
+  && routesSrc.includes("router.get('/admin/stats', auth, requireAdmin")
+  && routesSrc.includes("router.post('/admin/users/:id/reset-password', auth, requireAdmin"));
 check('routes.js: poner el PIN genera el código de recuperación, guarda su hash y lo devuelve una vez',
   routesSrc.includes('generateRecoveryCode()') && routesSrc.includes("setSiteSetting('gate_recovery_hash'")
   && routesSrc.includes('recoveryCode }') && routesSrc.includes("setSiteSetting('gate_pin_hash'"));
@@ -185,25 +189,30 @@ try {
   check('HTTP: sin PIN, GET / sirve el estático (200, index.html)',
     rRaiz.status === 200 && (await rRaiz.text()).includes('<html'));
 
-  console.log('v16.5 — 5. HTTP real: poner el PIN (solo admin)');
+  console.log('v16.5 — 5. HTTP real: poner el PIN (cualquier usuario con sesión)');
   const rPinSinToken = await post('/api/site-gate/pin', { pin: '1234' }, { ip: ip(4) });
   check('HTTP: POST /site-gate/pin sin token → 401 (exige sesión)',
     rPinSinToken.status === 401);
-  const rPinNoAdmin = await post('/api/site-gate/pin', { pin: '1234' }, { ip: ip(4), headers: { Authorization: `Bearer ${tokenUser}` } });
-  check('HTTP: POST /site-gate/pin con JWT de usuario (no admin) → 403',
-    rPinNoAdmin.status === 403);
   const rPinCorto = await post('/api/site-gate/pin', { pin: 'abc' }, { ip: ip(4), headers: { Authorization: `Bearer ${tokenAdmin}` } });
   check('HTTP: POST /site-gate/pin con PIN de 3 caracteres → 400',
     rPinCorto.status === 400);
   const rPinLargo = await post('/api/site-gate/pin', { pin: 'a'.repeat(33) }, { ip: ip(4), headers: { Authorization: `Bearer ${tokenAdmin}` } });
   check('HTTP: POST /site-gate/pin con PIN de 33 caracteres → 400',
     rPinLargo.status === 400);
-  const rPin = await post('/api/site-gate/pin', { pin: '1234' }, { ip: ip(4), headers: { Authorization: `Bearer ${tokenAdmin}` } });
+  // v16.7 — el usuario (no admin) pone el PIN: ya hay PIN puesto, así
+  // que el "poner con admin" posterior pasa a ser un cambio con
+  // currentPin (mismo valor) y regenera el código de recuperación.
+  const rPinUser = await post('/api/site-gate/pin', { pin: '1234' }, { ip: ip(4), headers: { Authorization: `Bearer ${tokenUser}` } });
+  const pinUserJson = await jsonDe(rPinUser);
+  const cookieUser = gateCookieDe(rPinUser);
+  check('HTTP: POST /site-gate/pin con JWT de usuario (no admin) → 200 (el dueño pone el PIN): devuelve UN código de recuperación válido y pone la cookie de puerta',
+    rPinUser.status === 200 && RECOVERY_RE.test(pinUserJson.recoveryCode || '') && typeof cookieUser === 'string' && cookieUser.length > 20);
+  const rPin = await post('/api/site-gate/pin', { pin: '1234', currentPin: '1234' }, { ip: ip(4), cookie: cookieUser, headers: { Authorization: `Bearer ${tokenAdmin}` } });
   const pinJson = await jsonDe(rPin);
   const recovery1 = pinJson.recoveryCode;
   const cookieAdmin = gateCookieDe(rPin);
-  check('HTTP: POST /site-gate/pin con admin pone el PIN (200): devuelve UN código de recuperación válido y pone la cookie de puerta',
-    rPin.status === 200 && RECOVERY_RE.test(recovery1 || '') && typeof cookieAdmin === 'string' && cookieAdmin.length > 20);
+  check('HTTP: POST /site-gate/pin con admin y currentPin cambia el PIN (mismo valor, 200): devuelve UN código de recuperación NUEVO y pone la cookie de puerta',
+    rPin.status === 200 && RECOVERY_RE.test(recovery1 || '') && recovery1 !== pinUserJson.recoveryCode && typeof cookieAdmin === 'string' && cookieAdmin.length > 20);
   const rStatus1 = await get('/api/site-gate/status');
   check('HTTP: tras poner el PIN, GET /api/site-gate/status → {locked:true}',
     rStatus1.status === 200 && (await jsonDe(rStatus1)).locked === true);
@@ -321,15 +330,24 @@ try {
   const rRemoveMal = await post('/api/site-gate/pin/remove', { currentPin: '0000' }, { ip: ip(16), cookie: cookiePin3, headers: { Authorization: `Bearer ${tokenAdmin}` } });
   check('HTTP: /pin/remove con currentPin incorrecto → 401',
     rRemoveMal.status === 401);
-  const rRemoveNoAdmin = await post('/api/site-gate/pin/remove', { currentPin: '7777' }, { ip: ip(16), cookie: cookiePin3, headers: { Authorization: `Bearer ${tokenUser}` } });
-  check('HTTP: /pin/remove con JWT de usuario (no admin) → 403',
-    rRemoveNoAdmin.status === 403);
   const rRemove = await post('/api/site-gate/pin/remove', { currentPin: '7777' }, { ip: ip(16), cookie: cookiePin3, headers: { Authorization: `Bearer ${tokenAdmin}` } });
   check('HTTP: /pin/remove con currentPin correcto → 200 {ok:true}',
     rRemove.status === 200 && (await jsonDe(rRemove)).ok === true);
   const rStatus3 = await get('/api/site-gate/status', { ip: ip(17) });
   check('HTTP: tras /pin/remove, status → {locked:false}',
     rStatus3.status === 200 && (await jsonDe(rStatus3)).locked === false);
+  // v16.7 — el usuario (no admin) también puede quitar el PIN: se
+  // vuelve a poner y lo quita él, con el mismo resultado final.
+  const rPin3 = await post('/api/site-gate/pin', { pin: '7777' }, { ip: ip(16), headers: { Authorization: `Bearer ${tokenAdmin}` } });
+  check('HTTP: poner el PIN otra vez (no había PIN) → 200',
+    rPin3.status === 200 && RECOVERY_RE.test((await jsonDe(rPin3)).recoveryCode || ''));
+  const cookiePin4 = gateCookieDe(rPin3);
+  const rRemoveUser = await post('/api/site-gate/pin/remove', { currentPin: '7777' }, { ip: ip(16), cookie: cookiePin4, headers: { Authorization: `Bearer ${tokenUser}` } });
+  check('HTTP: /pin/remove con JWT de usuario (no admin) y currentPin correcto → 200 (el dueño quita el PIN)',
+    rRemoveUser.status === 200 && (await jsonDe(rRemoveUser)).ok === true);
+  const rStatus3b = await get('/api/site-gate/status', { ip: ip(17) });
+  check('HTTP: tras /pin/remove por el usuario, status → {locked:false}',
+    rStatus3b.status === 200 && (await jsonDe(rStatus3b)).locked === false);
   const rRemoveSinPin = await post('/api/site-gate/pin/remove', { currentPin: '7777' }, { ip: ip(17), headers: { Authorization: `Bearer ${tokenAdmin}` } });
   check('HTTP: /pin/remove sin PIN puesto → 400',
     rRemoveSinPin.status === 400);
