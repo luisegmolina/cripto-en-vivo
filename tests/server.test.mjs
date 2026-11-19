@@ -103,7 +103,7 @@ test('CORS: en producción sin CORS_ORIGINS no hay cabeceras CORS; con CORS_ORIG
       const r = await fetch('http://127.0.0.1:' + s.address().port + '/api/health', { headers: { Origin: 'https://a.com' } });
       console.log(JSON.stringify({ acao: r.headers.get('access-control-allow-origin') }));
       process.exit(0);
-    });`], { cwd: path.resolve(path.dirname(dbPath), '..'), env: { ...process.env, NODE_ENV: 'production', JWT_SECRET: 'x'.repeat(20), ...extraEnv }, encoding: 'utf8' }).trim().split('\n').pop());
+    });`], { cwd: path.resolve(path.dirname(dbPath), '..'), env: { ...process.env, NODE_ENV: 'production', JWT_SECRET: 'x'.repeat(20), KALSHI_ENCRYPTION_KEY: 'a'.repeat(64), ...extraEnv }, encoding: 'utf8' }).trim().split('\n').pop());
   assert.equal(probe({}).acao, null);
   assert.equal(probe({ CORS_ORIGINS: 'https://a.com,https://b.com' }).acao, 'https://a.com');
   assert.equal(probe({ CORS_ORIGINS: 'https://b.com' }).acao, null);

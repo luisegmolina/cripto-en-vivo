@@ -1,9 +1,13 @@
-// Rutas v12 — usuarios, admin y Kalshi SOLO LECTURA.
-// Montadas en /api desde server/app.js. Nada de esto mueve dinero
-// real ni opera en Kalshi: la única llamada a Kalshi es GET a
+// Rutas v12 — usuarios, admin y Kalshi.
+// Montadas en /api desde server/app.js. La app es SOLO LECTURA
+// MIENTRAS el bot en vivo esté apagado (LIVE_TRADING_ENABLED no es
+// 'true'): en ese modo la única llamada a Kalshi es GET a
 // /portfolio/positions, /portfolio/balance y /portfolio/fills
-// (ver kalshiServer.js, allowlist). La clave privada de Kalshi se
-// guarda CIFRADA (crypto.js) y NUNCA se devuelve por ninguna API:
+// (ver kalshiServer.js, allowlist). Con live encendido Y armado en
+// POST /kalshi/live/enable, liveTrader.js SÍ puede enviar órdenes
+// (POST /trade-api/v2/portfolio/events/orders): es el único POST a
+// Kalshi de todo el proyecto. La clave privada de Kalshi se guarda
+// CIFRADA (crypto.js) y NUNCA se devuelve por ninguna API:
 // las respuestas solo traen keyIdPreview (4 primeros + 4 últimos).
 const express = require('express');
 const db = require('./db');
@@ -19,6 +23,12 @@ const liveTrader = require('./liveTrader');
 // ventana y al parar/arrancar, nunca cada segundo.
 paperAuditor.setPersistencia(async (userId, resultados) => {
   await db.setUserData(userId, 'paper_audit', { resultados, updatedAt: new Date().toISOString() });
+});
+
+// v16.3 — El historial sin tope del auditor (cada ventana liquidada,
+// compacta) en cev_user_data kind 'cev_paper_windows' (array plano).
+paperAuditor.setPersistenciaHistorial(async (userId, historial) => {
+  await db.setUserData(userId, 'cev_paper_windows', Array.isArray(historial) ? historial : []);
 });
 
 // v16.2 — El bot en vivo persiste su registro de decisiones (máx. 50)
@@ -63,7 +73,94 @@ function validEmail(e) { return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(e ||
 // admin). Si ya hay un admin, no hace nada. La contraseña NUNCA se
 // escribe en logs ni en GitHub. Tras crear el admin, quita
 // ADMIN_PASSWORD de las variables de entorno de Render.
+
+// v16.3 — En producción el servidor NO arranca sin los secretos:
+// JWT_SECRET (firmar sesiones) y KALSHI_ENCRYPTION_KEY (cifrar la
+// clave de Kalshi). DATABASE_URL sigue siendo OPCIONAL: sin ella el
+// servidor usa el modo archivo local (diseño actual; en Render hay
+// que ponerla para no perder usuarios al reiniciar, ver db.js).
+// Lanza Error con el mensaje claro; app.js lo convierte en salida
+// del proceso en producción. Función pura de `env` para probarla.
+function verificarVariablesArranque(env = process.env) {
+  if ((env.NODE_ENV || '') !== 'production') return true;
+  const falta = (msg) => {
+    const e = new Error(msg);
+    e.code = 'MISSING_SECRETS';
+    return e;
+  };
+  if (!String(env.JWT_SECRET || '').trim()) {
+    throw falta('Falta JWT_SECRET (variable de entorno en Render). En producción el servidor no arranca sin ella.');
+  }
+  const raw = String(env.KALSHI_ENCRYPTION_KEY || '').trim();
+  if (!raw) {
+    throw falta('Falta KALSHI_ENCRYPTION_KEY (variable de entorno en Render). En producción el servidor no arranca sin ella.');
+  }
+  if (!/^[0-9a-fA-F]{64}$/.test(raw)) {
+    let ok = false;
+    try { ok = Buffer.from(raw, 'base64').length === 32; } catch { ok = false; }
+    if (!ok) throw falta('KALSHI_ENCRYPTION_KEY no es válida: usa 64 caracteres hex (32 bytes) o base64 de 32 bytes.');
+  }
+  return true;
+}
+
+// v16.3 — Cuenta única: el registro se cierra cuando ya existe algún
+// usuario. init() crea el admin con db.createUser directo, no por
+// esta ruta, así que no se rompe.
+async function registroCerrado(dbMod) {
+  const usuarios = await dbMod.listUsers();
+  return Array.isArray(usuarios) && usuarios.length > 0;
+}
+
+// v16.3 — Arranque automático del auditor en papel: para cada usuario
+// con autostart=true y conexión Kalshi guardada, abre el WS BRTI y
+// arranca el auditor con su clave descifrada. Fail-closed por usuario:
+// sin conexión, sin descifrado o con cualquier error, se registra el
+// motivo y se sigue con el siguiente usuario (nunca tumba el arranque).
+// Solo arranca el AUDITOR (papel): sin la env LIVE_TRADING_ENABLED y
+// sin armar, no sale ninguna orden.
+async function arrancarAutostart() {
+  let usuarios;
+  try {
+    usuarios = await db.listUsers();
+  } catch (e) {
+    console.log('[autostart] No se pudo listar usuarios:', e.message);
+    return;
+  }
+  for (const u of usuarios) {
+    try {
+      const settings = await db.getUserData(u.id, 'paper_audit_settings').catch(() => null);
+      if (!settings || settings.autostart !== true) continue;
+      const conn = await db.getKalshiConnection(u.id);
+      if (!conn) {
+        console.log(`[autostart] Usuario ${u.id}: autostart activo pero sin conexión Kalshi, no arranca.`);
+        continue;
+      }
+      let privateKeyPem;
+      try {
+        privateKeyPem = decrypt(conn.privateKeyEncrypted);
+      } catch {
+        console.log(`[autostart] Usuario ${u.id}: no se pudo descifrar la clave de Kalshi, no arranca.`);
+        continue;
+      }
+      brti.ensureBrti(u.id, { keyId: conn.keyId, privateKeyPem });
+      const prev = await db.getUserData(u.id, 'paper_audit').catch(() => null);
+      const hist = await db.getUserData(u.id, 'cev_paper_windows').catch(() => null);
+      paperAuditor.setAutostart(u.id, true);
+      paperAuditor.startAuditor(
+        u.id,
+        prev && Array.isArray(prev.resultados) ? prev.resultados : [],
+        Array.isArray(hist) ? hist : [],
+      );
+      console.log(`[autostart] Auditor en papel arrancado para el usuario ${u.id}.`);
+    } catch (e) {
+      console.log(`[autostart] Usuario ${u.id}: no arrancó (${e.message}).`);
+    }
+  }
+}
+
 async function init() {
+  // v16.3 — en producción, sin secretos no se arranca (falla cerrado).
+  verificarVariablesArranque();
   await db.init();
   const adminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
   const adminPass = process.env.ADMIN_PASSWORD || '';
@@ -85,6 +182,8 @@ async function init() {
       }
     }
   }
+  // v16.3 — arranque automático del auditor en papel (solo papel).
+  await arrancarAutostart();
 }
 
 // --- Auth ---
@@ -93,6 +192,9 @@ router.post('/auth/register', registerRateLimit, async (req, res) => {
   if (!validEmail(email)) return res.status(400).json({ error: 'Pon un email válido.' });
   if (!password || String(password).length < 8) return res.status(400).json({ error: 'La contraseña necesita al menos 8 caracteres.' });
   try {
+    // v16.3 — cuenta única: si ya existe algún usuario, el registro
+    // está cerrado (403). El admin se crea en init(), no por aquí.
+    if (await registroCerrado(db)) return res.status(403).json({ error: 'El registro está cerrado: esta app es de un solo usuario.' });
     const user = await db.createUser({ email, passwordHash: await hashPassword(password), name: String(name || '').slice(0, 50), role: 'user' });
     return res.status(201).json({ token: signToken(user), user });
   } catch (e) {
@@ -172,6 +274,10 @@ router.delete('/kalshi/connect', auth, async (req, res) => {
   brti.stopBrti(req.user.id); // cierra el WebSocket BRTI de este usuario
   await paperAuditor.stopAuditor(req.user.id).catch(() => {}); // sin Kalshi no hay auditor
   await liveTrader.kill(req.user.id, 'kalshi_disconnected').catch(() => {}); // sin Kalshi no hay bot en vivo
+  // v16.3 — sin conexión tampoco hay arranque automático: se apaga el
+  // flag para que el próximo arranque no lo intente sin clave.
+  paperAuditor.setAutostart(req.user.id, false);
+  await db.setUserData(req.user.id, 'paper_audit_settings', { autostart: false, updatedAt: new Date().toISOString() }).catch(() => {});
   res.json({ ok: true });
 });
 
@@ -232,7 +338,12 @@ router.post('/kalshi/paper-audit/start', auth, async (req, res) => {
   // de ahí cada segundo y así mantiene vivo el WS.
   brti.ensureBrti(req.user.id, { keyId: conn.keyId, privateKeyPem });
   const prev = await db.getUserData(req.user.id, 'paper_audit').catch(() => null);
-  const snap = paperAuditor.startAuditor(req.user.id, prev && Array.isArray(prev.resultados) ? prev.resultados : []);
+  const hist = await db.getUserData(req.user.id, 'cev_paper_windows').catch(() => null);
+  const snap = paperAuditor.startAuditor(
+    req.user.id,
+    prev && Array.isArray(prev.resultados) ? prev.resultados : [],
+    Array.isArray(hist) ? hist : [],
+  );
   res.json({ ok: true, ...snap, kalshiConnected: true });
 });
 
@@ -240,6 +351,20 @@ router.post('/kalshi/paper-audit/stop', auth, async (req, res) => {
   const snap = await paperAuditor.stopAuditor(req.user.id);
   const conn = await db.getKalshiConnection(req.user.id);
   res.json({ ok: true, ...snap, kalshiConnected: !!conn });
+});
+
+// v16.3 — Arranque automático del auditor en papel al reiniciar el
+// servidor. Solo afecta al AUDITOR (papel): sin la env
+// LIVE_TRADING_ENABLED y sin armar, no sale ninguna orden.
+// Default false; se persiste por usuario (kind 'paper_audit_settings').
+// Apagarlo NO detiene el auditor que ya está corriendo: para eso está
+// Detener. El flag solo manda en el próximo arranque.
+router.post('/kalshi/paper-audit/autostart', auth, async (req, res) => {
+  const v = req.body && req.body.autostart === true;
+  paperAuditor.setAutostart(req.user.id, v);
+  await db.setUserData(req.user.id, 'paper_audit_settings', { autostart: v, updatedAt: new Date().toISOString() });
+  const snap = paperAuditor.getSnapshot(req.user.id);
+  res.json({ ok: true, ...snap });
 });
 
 // v16.2 — BOT EN VIVO (APAGADO por defecto). Ninguna de estas rutas
@@ -324,4 +449,4 @@ router.post('/admin/users/:id/reset-password', auth, requireAdmin, async (req, r
   res.json({ ok: true });
 });
 
-module.exports = { router, init };
+module.exports = { router, init, verificarVariablesArranque, registroCerrado };

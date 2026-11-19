@@ -234,9 +234,8 @@ check('routes.js expone GET /kalshi/live/status, POST /kalshi/live/kill y POST /
 check('enable devuelve 403 mientras LIVE_TRADING_ENABLED no sea true (el interruptor manda)',
   routesSrc.includes("status(403)") && routesSrc.includes('LIVE_TRADING_ENABLED') &&
   routesSrc.includes('isLiveEnabled()'));
-check('routes.js no contiene fetch a Kalshi ni la ruta de órdenes (el POST vive solo en liveTrader.js)',
-  !routesSrc.includes('portfolio/events/orders') && !routesSrc.includes('portfolio/orders') &&
-  !routesSrc.includes('fetch('));
+check('routes.js no contiene fetch a Kalshi ni la ruta de órdenes (el POST vive solo en liveTrader.js; actualizado por diseño en v16.3: el comentario de cabecera documenta la ruta, se ignoran los comentarios)',
+  (() => { const sinComentarios = routesSrc.replace(/\/\/.*$/gm, ''); return !sinComentarios.includes('portfolio/events/orders') && !sinComentarios.includes('portfolio/orders') && !sinComentarios.includes('fetch('); })());
 check('desconectar Kalshi también mata el trader',
   routesSrc.includes("liveTrader.kill(req.user.id, 'kalshi_disconnected')"));
 
@@ -244,9 +243,9 @@ console.log('v16.2 — 12. Persistencia live_trade_log y cableado del cliente');
 check('db.js y schema.sql admiten kind live_trade_log (CHECK + migración DROP/ADD)',
   dbSrc.includes("'live_trade_log'") && dbSrc.includes('DROP CONSTRAINT IF EXISTS cev_user_data_kind_check') &&
   schemaSql.includes("'live_trade_log'"));
-check('App.jsx monta §7 LiveTrader después de PaperAudit y antes de AccountBox, con VERSION_LABEL v16.2',
+check('App.jsx monta §7 LiveTrader después de PaperAudit y antes de AccountBox, con VERSION_LABEL v16.3 (actualizado por diseño en v16.3)',
   app.includes("import LiveTrader from './components/LiveTrader.jsx'") &&
-  app.includes("const VERSION_LABEL = 'v16.2") &&
+  app.includes("const VERSION_LABEL = 'v16.3") &&
   app.indexOf('<LiveTrader user={user} fmt={fmt} />') > app.indexOf('<PaperAudit user={user} fmt={fmt} />') &&
   app.indexOf('<LiveTrader user={user} fmt={fmt} />') < app.indexOf('<AccountBox'));
 check('LiveTrader.jsx: §7 APAGADO, sondeo status cada 2 s, botón Detener (kill), Armar deshabilitado sin live',

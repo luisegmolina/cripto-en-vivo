@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS cev_kalshi_connections (
 -- resultados del auditor en papel). JSON por usuario.
 CREATE TABLE IF NOT EXISTS cev_user_data (
   user_id INTEGER NOT NULL REFERENCES cev_users(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN ('portfolio', 'alerts', 'paper_audit', 'live_trade_log')),
+  kind TEXT NOT NULL CHECK (kind IN ('portfolio', 'alerts', 'paper_audit', 'live_trade_log', 'paper_audit_settings', 'cev_paper_windows')),
   data JSONB NOT NULL DEFAULT '{}'::jsonb,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (user_id, kind)
@@ -37,10 +37,13 @@ CREATE TABLE IF NOT EXISTS cev_user_data (
 -- v16.1: migración para bases ya creadas con el CHECK viejo
 -- (el servidor también la aplica en db.init() al arrancar).
 ALTER TABLE cev_user_data DROP CONSTRAINT IF EXISTS cev_user_data_kind_check;
-ALTER TABLE cev_user_data ADD CONSTRAINT cev_user_data_kind_check CHECK (kind IN ('portfolio', 'alerts', 'paper_audit', 'live_trade_log'));
+ALTER TABLE cev_user_data ADD CONSTRAINT cev_user_data_kind_check CHECK (kind IN ('portfolio', 'alerts', 'paper_audit', 'live_trade_log', 'paper_audit_settings', 'cev_paper_windows'));
 
 -- v16.2: kind 'live_trade_log' para el registro de decisiones del bot
 -- en vivo (would-send / blocked / killed / sent). Misma migración de
 -- arriba: el CHECK nuevo ya lo incluye.
+-- v16.3: kinds 'paper_audit_settings' (flag autostart del auditor) y
+-- 'cev_paper_windows' (historial sin tope de ventanas liquidadas,
+-- registros compactos). Misma migración de arriba.
 
 CREATE INDEX IF NOT EXISTS cev_users_email_idx ON cev_users (email);

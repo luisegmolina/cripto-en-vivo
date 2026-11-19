@@ -28,9 +28,15 @@
 //   espera la siguiente ventana (promedio incompleto = auditoría falsa).
 // - Comisión taker Kalshi: 0.07 * P * (1 - P) por contrato.
 //   Break-even real = ask + fee. Señal solo entre T-18 y T-3.
-// - Quote fresca al ticker exacto (GET público, sin caché de 15 s).
+// - Quote fresca al ticker exacto (GET público, sin caché de 15 s),
+//   pero SIN bloquear el muestreo: v16.3 la pide solo cuando R ≤ 20,
+//   en paralelo y sin esperar; si tarda o falla, el tick BRTI se
+//   muestrea igual y la señal se evalúa con la última quote fresca.
 // - Persistencia: solo al cerrar ventana y al parar/arrancar, nunca
 //   cada segundo (vía hook setPersistencia, registrado en routes.js).
+//   v16.3: además del top-20 para la UI, cada ventana liquidada se
+//   guarda compacta y SIN tope en el historial (kind
+//   'cev_paper_windows'); las stats se calculan sobre TODO el historial.
 const crypto = require('crypto');
 const brti = require('./brti');
 const { BASE, parseTargetPrice } = require('./kalshiServer');
@@ -171,12 +177,24 @@ function finalizarVentana(estado, oficial) {
 }
 
 function calcularStats(resultados) {
-  const list = Array.isArray(resultados) ? resultados : [];
-  const senales = list.filter((r) => r.simulacion).length;
-  const viablesList = list.filter((r) => r.simulacion && r.simulacion.viableDespuesDeComision);
+  // v16.3 — un registro puede venir en forma completa (con
+  // .simulacion, lo que guarda 'paper_audit') o compacta (con
+  // .senal/.viable, lo que guarda el historial 'cev_paper_windows').
+  // Se normaliza para que las stats valgan sobre ambas.
+  const normalizar = (r) => {
+    const sim = r.simulacion || null;
+    return {
+      ...r,
+      senal: sim ? sim.direccionElegida : (r.senal || null),
+      viable: sim ? !!sim.viableDespuesDeComision : (r.viable === true ? true : (r.viable === false ? false : null)),
+    };
+  };
+  const list = (Array.isArray(resultados) ? resultados : []).map(normalizar);
+  const senales = list.filter((r) => r.senal).length;
+  const viablesList = list.filter((r) => r.senal && r.viable === true);
   const viables = viablesList.length;
   const viablesLiquidadas = viablesList.filter((r) => r.resultadoOficialKalshi && r.resultadoOficialKalshi !== 'pendiente');
-  const aciertosEnViables = viablesLiquidadas.filter((r) => r.simulacion.direccionElegida === r.resultadoOficialKalshi).length;
+  const aciertosEnViables = viablesLiquidadas.filter((r) => r.senal === r.resultadoOficialKalshi).length;
   const conPrediccion = list.filter((r) => r.prediccionLocal && r.resultadoOficialKalshi && r.resultadoOficialKalshi !== 'pendiente');
   const aciertos = conPrediccion.filter((r) => r.prediccionLocal === r.resultadoOficialKalshi).length;
   const conError = list.filter((r) => r.errorTwapVsOficial != null && Number.isFinite(Number(r.errorTwapVsOficial)));
@@ -197,6 +215,38 @@ function calcularStats(resultados) {
     errorMedioAbsUSD,
     errorMaxAbsUSD,
   };
+}
+
+// v16.3 — Registro compacto para el historial sin tope: solo los
+// campos mínimos que hacen falta para las stats (nada de muestras ni
+// de payloads). La señal se guarda como dirección + viable.
+function compactarRegistro(registro) {
+  if (!registro || typeof registro !== 'object') return null;
+  const sim = registro.simulacion || null;
+  return {
+    ticker: registro.ticker || null,
+    targetPrice: registro.targetPrice != null ? registro.targetPrice : null,
+    twapLocal: registro.twapLocal != null ? registro.twapLocal : null,
+    brtiLiquidacionOficial: registro.brtiLiquidacionOficial != null ? registro.brtiLiquidacionOficial : null,
+    errorTwapVsOficial: registro.errorTwapVsOficial != null ? registro.errorTwapVsOficial : null,
+    prediccionLocal: registro.prediccionLocal || null,
+    resultadoOficialKalshi: registro.resultadoOficialKalshi || 'pendiente',
+    senal: sim ? sim.direccionElegida : null,
+    viable: sim ? !!sim.viableDespuesDeComision : null,
+    closedAt: registro.closedAt || null,
+  };
+}
+
+// Inserta o actualiza (misma ventana: mismo ticker + closedAt) un
+// registro compacto en el historial SIN tope. Devuelve el historial.
+function actualizarHistorial(historial, registro) {
+  const list = Array.isArray(historial) ? historial : [];
+  const compacto = compactarRegistro(registro);
+  if (!compacto) return list;
+  const idx = list.findIndex((r) => r.ticker === compacto.ticker && r.closedAt === compacto.closedAt);
+  if (idx >= 0) list[idx] = compacto;
+  else list.push(compacto);
+  return list;
 }
 
 // --- Lecturas públicas de Kalshi (solo GET, sin clave) ---
@@ -256,6 +306,7 @@ async function obtenerQuoteContrato(ticker, fetchFn = fetchConTimeout) {
 
 const auditors = new Map(); // userId -> estado
 let persistenciaHook = null;
+let persistenciaHistorialHook = null;
 let tickerInterval = null;
 
 function crearEstadoAuditor() {
@@ -276,14 +327,41 @@ function crearEstadoAuditor() {
     ticksEsperadosActual: null,
     ticksPerdidosActual: null,
     quoteActual: null,
+    quoteEnVuelo: false,
     resultados: [],
+    // v16.3 — arranque automático (flag por usuario, default false) e
+    // historial SIN tope de ventanas liquidadas (compactas).
+    autostart: false,
+    historial: [],
   };
+}
+
+// v16.3 — Arranque automático: flag por usuario (default false, nunca
+// true por defecto). Lo lee routes.js al arrancar el servidor y lo
+// escribe POST /kalshi/paper-audit/autostart. Solo arranca el AUDITOR
+// EN PAPEL; sin la env LIVE_TRADING_ENABLED y sin armar, no sale
+// ninguna orden.
+function setAutostart(userId, v) {
+  let est = auditors.get(userId);
+  if (!est) { est = crearEstadoAuditor(); auditors.set(userId, est); }
+  est.autostart = v === true;
+  return est.autostart;
+}
+function isAutostart(userId) {
+  const est = auditors.get(userId);
+  return !!(est && est.autostart);
 }
 
 // Registra dónde persistir (lo llama routes.js con db.setUserData).
 // Sin hook, no se persiste (modo pruebas).
 function setPersistencia(fn) {
   persistenciaHook = typeof fn === 'function' ? fn : null;
+}
+
+// v16.3 — Hook aparte para el historial sin tope (kind
+// 'cev_paper_windows'). Sin hook, no se persiste (modo pruebas).
+function setPersistenciaHistorial(fn) {
+  persistenciaHistorialHook = typeof fn === 'function' ? fn : null;
 }
 
 async function persistir(userId) {
@@ -296,6 +374,16 @@ async function persistir(userId) {
   }
 }
 
+async function persistirHistorial(userId) {
+  const est = auditors.get(userId);
+  if (!est || !persistenciaHistorialHook) return;
+  try {
+    await persistenciaHistorialHook(userId, est.historial);
+  } catch (e) {
+    console.log('[paper-audit] No se pudo persistir el historial:', e.message);
+  }
+}
+
 function getSnapshot(userId, ahoraMs = Date.now()) {
   const est = auditors.get(userId);
   if (!est) {
@@ -305,8 +393,12 @@ function getSnapshot(userId, ahoraMs = Date.now()) {
       ticksPerdidos: null, saltoRequeridoUSD: null, yesAskDollars: null,
       noAskDollars: null, simulacion: null, resultados: [],
       stats: calcularStats([]), ultimoError: null,
+      autostart: false, historialTotal: 0,
     };
   }
+  // v16.3 — las stats se calculan sobre TODO el historial (sin tope);
+  // si aún no hay historial, se usan las últimas 20 como antes.
+  const fuenteStats = est.historial.length > 0 ? est.historial : est.resultados;
   return {
     enabled: est.enabled,
     startedAt: est.startedAt,
@@ -321,12 +413,14 @@ function getSnapshot(userId, ahoraMs = Date.now()) {
     noAskDollars: est.quoteActual ? est.quoteActual.noAskDollars : null,
     simulacion: est.simulacion,
     resultados: est.resultados,
-    stats: calcularStats(est.resultados),
+    stats: calcularStats(fuenteStats),
     ultimoError: est.ultimoError,
+    autostart: est.autostart,
+    historialTotal: est.historial.length,
   };
 }
 
-function startAuditor(userId, resultadosPersistidos = []) {
+function startAuditor(userId, resultadosPersistidos = [], historialPersistido = []) {
   let est = auditors.get(userId);
   if (!est) { est = crearEstadoAuditor(); auditors.set(userId, est); }
   est.enabled = true;
@@ -344,7 +438,19 @@ function startAuditor(userId, resultadosPersistidos = []) {
   est.ticksEsperadosActual = null;
   est.ticksPerdidosActual = null;
   est.quoteActual = null;
+  est.quoteEnVuelo = false;
   est.resultados = Array.isArray(resultadosPersistidos) ? resultadosPersistidos.slice(0, MAX_RESULTADOS) : [];
+  // v16.3 — el historial sin tope: si no hay historial persistido
+  // pero sí resultados, se siembra desde TODOS ellos (compactados)
+  // para no perder la continuidad de las stats — no desde la vista
+  // recortada a 20.
+  if (Array.isArray(historialPersistido) && historialPersistido.length > 0) {
+    est.historial = historialPersistido.filter((r) => r && r.ticker);
+  } else if (Array.isArray(resultadosPersistidos) && resultadosPersistidos.length > 0) {
+    est.historial = resultadosPersistidos.map(compactarRegistro).filter(Boolean);
+  } else {
+    est.historial = [];
+  }
   ensureTicker();
   return getSnapshot(userId);
 }
@@ -355,6 +461,7 @@ async function stopAuditor(userId) {
   est.enabled = false;
   est.contrato = null;
   await persistir(userId);
+  await persistirHistorial(userId);
   return getSnapshot(userId);
 }
 
@@ -376,6 +483,36 @@ function ensureTicker() {
     if (!alguno && tickerInterval) { clearInterval(tickerInterval); tickerInterval = null; }
   }, 1000);
   if (tickerInterval.unref) tickerInterval.unref();
+}
+
+// v16.3 — Evalúa la señal con una quote ya disponible, usando el
+// estado ACTUAL (muestras y TWAP de ahora) y el R del momento en que
+// se pidió la quote (rForzado; si es null, R se calcula con ahoraMs).
+// Solo entre T-18 y T-3 y si aún no hay simulación; si evaluarSenalPapel
+// devuelve null, no se congela nada y el próximo tick reintenta.
+function evaluarSenalConQuote(est, quote, ahoraMs = Date.now(), rForzado = null) {
+  if (!est || !est.contrato || est.simulacion) return null;
+  if (!quote || quote.ticker !== est.contrato.ticker) return null;
+  if (quote.fetchedAt != null && (ahoraMs - quote.fetchedAt) > 5000) return null;
+  const closeEpochSec = Math.floor(est.contrato.closeMs / 1000);
+  const R = rForzado != null ? rForzado : (closeEpochSec - Math.floor(ahoraMs / 1000));
+  if (R < 3 || R > 18) return null;
+  const { n, twap } = calcularTwapBloqueado(est.muestras);
+  const ticksEsperados = 61 - R;
+  const ticksPerdidos = Math.max(ticksEsperados - n, 0);
+  const sim = evaluarSenalPapel({
+    ticker: est.contrato.ticker,
+    targetPrice: est.contrato.targetPrice,
+    twapBloqueado: twap,
+    muestrasCapturadas: n,
+    ticksPerdidos,
+    segundosRestantes: R,
+    brtiValue: est.ultimoBrti ? est.ultimoBrti.value : null,
+    yesAskDollars: quote.yesAskDollars,
+    noAskDollars: quote.noAskDollars,
+  });
+  if (sim) est.simulacion = sim;
+  return sim;
 }
 
 // Un tick del auditor (1 s). `deps` permite inyectar stubs en pruebas:
@@ -411,6 +548,7 @@ async function tickAuditor(userId, ahoraMs = Date.now(), deps = {}) {
       est.ticksEsperadosActual = null;
       est.ticksPerdidosActual = null;
       est.quoteActual = null;
+      est.quoteEnVuelo = false;
       est.ultimoError = null;
       return getSnapshot(userId, ahoraMs);
     }
@@ -432,11 +570,14 @@ async function tickAuditor(userId, ahoraMs = Date.now(), deps = {}) {
     }
 
     // 3. Ventana del último minuto (T-60 a T-1).
+    // v16.3 — MUESTREO DESACOPLADO: el tick BRTI se lee de memoria
+    // (síncrono, sin red) y se muestrea SIEMPRE, aunque la cotización
+    // tarde o falle. La cotización solo se pide cuando R ≤ 20, en
+    // paralelo y sin esperar: un fallo o lentitud suya ya no salta
+    // segundos de muestreo ni hace crecer ticksPerdidos. La señal se
+    // evalúa con la última quote fresca (≤5 s) del mismo ticker.
     if (R >= 1 && R <= 60) {
-      const [estadoBrti, quote] = await Promise.all([
-        Promise.resolve(leerBrti(userId)),
-        cotizar(est.contrato.ticker),
-      ]);
+      const estadoBrti = await Promise.resolve(leerBrti(userId));
       if (!estadoBrti || estadoBrti.value == null) {
         est.ultimoError = 'Sin tick BRTI (WS sin dato). El auditor espera al próximo tick.';
         return getSnapshot(userId, ahoraMs);
@@ -455,13 +596,42 @@ async function tickAuditor(userId, ahoraMs = Date.now(), deps = {}) {
         est.muestras.set(segActualEpoch, estadoBrti.value);
       }
 
+      // Cotización en paralelo, sin bloquear: solo R ≤ 20 y una sola
+      // petición en vuelo. Si falla o tarda, el muestreo sigue igual.
+      if (R <= 20 && !est.quoteEnVuelo) {
+        est.quoteEnVuelo = true;
+        const tickerPedido = est.contrato.ticker;
+        const solicitadoMs = ahoraMs;
+        const rPedido = R;
+        Promise.resolve()
+          .then(() => cotizar(tickerPedido))
+          .then((q) => {
+            est.quoteEnVuelo = false;
+            if (!q || q.ticker !== tickerPedido) return;
+            if (!est.contrato || est.contrato.ticker !== tickerPedido) return;
+            const quoteRecibida = { yesAskDollars: q.yesAskDollars, noAskDollars: q.noAskDollars, ticker: q.ticker, fetchedAt: solicitadoMs };
+            est.quoteActual = quoteRecibida;
+            // v16.3 — al llegar la quote, evaluar con el estado actual
+            // (muestras y TWAP de ahora) y el R del momento en que se
+            // pidió (la quote tarda <1 s en lo normal; el próximo tick
+            // reevalúa con la quote ya en caché si no hubo señal).
+            evaluarSenalConQuote(est, quoteRecibida, solicitadoMs, rPedido);
+          })
+          .catch(() => { est.quoteEnVuelo = false; });
+      }
+      const quote = est.quoteActual && est.quoteActual.ticker === est.contrato.ticker
+        && (ahoraMs - (est.quoteActual.fetchedAt || 0)) <= 5000
+        ? est.quoteActual : null;
+
       const { n, suma, twap } = calcularTwapBloqueado(est.muestras);
       const ticksEsperados = 61 - R;
       const ticksPerdidos = Math.max(ticksEsperados - n, 0);
       est.twapActual = twap == null ? null : +twap.toFixed(2);
       est.ticksEsperadosActual = ticksEsperados;
       est.ticksPerdidosActual = ticksPerdidos;
-      est.quoteActual = quote ? { yesAskDollars: quote.yesAskDollars, noAskDollars: quote.noAskDollars } : null;
+      // v16.3 — quoteActual YA NO se toca aquí: la gestiona solo la
+      // petición en paralelo (con ticker + fetchedAt); si se
+      // sobrescribiera sin ellos, la frescura de la quote se perdería.
 
       const segundosRestantesReales = Math.max(R - 1, 0);
       const totalMuestrasEfectivas = n + segundosRestantesReales;
@@ -472,19 +642,9 @@ async function tickAuditor(userId, ahoraMs = Date.now(), deps = {}) {
         ? +(brtiRequeridoRestante - estadoBrti.value).toFixed(2)
         : null;
 
-      if (!est.simulacion && R <= 18 && R >= 3 && quote && quote.ticker === est.contrato.ticker) {
-        est.simulacion = evaluarSenalPapel({
-          ticker: est.contrato.ticker,
-          targetPrice: est.contrato.targetPrice,
-          twapBloqueado: twap,
-          muestrasCapturadas: n,
-          ticksPerdidos,
-          segundosRestantes: R,
-          brtiValue: estadoBrti.value,
-          yesAskDollars: quote.yesAskDollars,
-          noAskDollars: quote.noAskDollars,
-        });
-      }
+      // v16.3 — la señal se evalúa con la quote en caché (fresca) o
+      // al llegar la quote pedida (ver callback de arriba).
+      evaluarSenalConQuote(est, quote, ahoraMs);
       return getSnapshot(userId, ahoraMs);
     }
 
@@ -506,6 +666,7 @@ async function tickAuditor(userId, ahoraMs = Date.now(), deps = {}) {
       est.ticksEsperadosActual = null;
       est.ticksPerdidosActual = null;
       est.quoteActual = null;
+      est.quoteEnVuelo = false;
       est.ultimoDescubrimientoMs = 0;
       const guardarOActualizarRegistro = async (oficial) => {
         const registro = finalizarVentana(estadoCierre, oficial);
@@ -519,7 +680,11 @@ async function tickAuditor(userId, ahoraMs = Date.now(), deps = {}) {
           e2.resultados.unshift(registro);
           e2.resultados = e2.resultados.slice(0, MAX_RESULTADOS);
         }
+        // v16.3 — el historial sin tope también se actualiza (misma
+        // ventana: se actualiza en su sitio, no se duplica).
+        e2.historial = actualizarHistorial(e2.historial, registro);
         await persistir(userId);
+        await persistirHistorial(userId);
         return registro;
       };
       const t = setTimeout(async () => {
@@ -552,8 +717,10 @@ module.exports = {
   CONTRACTS_QTY, MIN_REQ_MOVE_USD, MIN_NET_EDGE_DOLLARS, MAX_TICKS_PERDIDOS, MAX_RESULTADOS,
   calcularComisionPorContrato, construirPayloadOrdenV2, calcularTwapBloqueado,
   debeDescartarContrato, evaluarSenalPapel, finalizarVentana, calcularStats,
+  compactarRegistro, actualizarHistorial,
   descubrirProximoContrato, obtenerQuoteContrato,
-  setPersistencia, getSnapshot, startAuditor, stopAuditor, tickAuditor,
+  setPersistencia, setPersistenciaHistorial, setAutostart, isAutostart,
+  getSnapshot, startAuditor, stopAuditor, tickAuditor, evaluarSenalConQuote,
   crearEstadoAuditor,
   // Solo para pruebas: inspeccionar el estado en memoria.
   _auditors: auditors,

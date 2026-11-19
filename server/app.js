@@ -506,7 +506,18 @@ app.get('/api/kalshi-market', async (req, res) => {
 // no está disponible, la app pública sigue funcionando igual.
 const authRoutes = require('./routes');
 app.use('/api', authRoutes.router);
-authRoutes.init().catch((e) => console.log('[auth] ⚠️ La BD de usuarios no arrancó (la app pública sigue igual):', e.message));
+// v16.3 — en producción, si init() falla por FALTA DE SECRETOS
+// (JWT_SECRET o KALSHI_ENCRYPTION_KEY), el proceso sale: mejor no
+// arrancar que arrancar sin secretos. Un fallo de BD sigue siendo
+// solo un aviso (la app pública sigue igual), como antes. En Vercel
+// (serverless) no se sale del proceso: la función falla la petición.
+authRoutes.init().catch((e) => {
+  console.log('[auth] ⚠️ La BD de usuarios no arrancó (la app pública sigue igual):', e.message);
+  if (e && e.code === 'MISSING_SECRETS' && !process.env.VERCEL) {
+    console.error('[auth] ⛔ Sin secretos en producción: el servidor no arranca.');
+    process.exit(1);
+  }
+});
 // desde client/dist (outputDirectory). Solo en local (no Vercel) el
 // servidor Express sirve client/dist, para que `npm start` funcione.
 if (!process.env.VERCEL) {

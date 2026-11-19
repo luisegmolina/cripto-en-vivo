@@ -12,7 +12,7 @@ export default function AccountBox({ user, token, kalshiScore, kalshiVerdictKey,
         <KalshiConnect token={token} kalshiScore={kalshiScore} kalshiVerdictKey={kalshiVerdictKey} currentPrice={kalshiPrice} referencePrice={kalshiRefPrice} referenceSource={kalshiRefSource} currency={currency} user={user} onLogout={onLogout} active onRealDecision={onRealDecision} minimal />
       ) : (
         <div>
-          <p className="muted">Entra o crea tu cuenta para conectar tu Kalshi y ver tus posiciones reales. La app nunca opera por ti: solo lee tus posiciones.</p>
+          <p className="muted">Entra o crea tu cuenta para conectar tu Kalshi y ver tus posiciones reales. La app solo lee tus posiciones mientras el bot en vivo (§7) esté apagado; hoy está apagado.</p>
           <div className="row">
             <button onClick={() => onShowAuth('login')}>Entrar</button>
             <button onClick={() => onShowAuth('register')}>Crear cuenta</button>

@@ -21,7 +21,7 @@ import AuthModal from './components/AuthModal.jsx';
 
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v16.2 — Bot en vivo (apagado)';
+const VERSION_LABEL = 'v16.3 — Arranque auto + watchdog + historial';
 
 function visibleInterval(fn, ms) {
   const t = setInterval(() => { if (!document.hidden) fn(); }, ms);
@@ -647,7 +647,7 @@ export default function App() {
         <AuthModal showAuth={showAuth} authName={authName} onAuthName={setAuthName} authEmail={authEmail} onAuthEmail={setAuthEmail} authPassword={authPassword} onAuthPassword={setAuthPassword} authBusy={authBusy} authError={authError} onSubmit={handleAuthSubmit} onClose={() => setShowAuth(null)} onSwitchMode={(m) => { setShowAuth(m); setAuthError(''); }} />
       )}
 
-      <p className="warn">⚠️ Prueba educativa, dinero virtual, solo lectura: la app nunca opera por ti. Kalshi liquida con el índice BRTI (promedio de 60 s), no con Coinbase.</p>
+      <p className="warn">⚠️ Prueba educativa, dinero virtual: con el bot en vivo APAGADO (§7), la app nunca opera por ti. Si lo enciendes y lo armas, sí puede enviar órdenes en Kalshi. Kalshi liquida con el índice BRTI (promedio de 60 s), no con Coinbase.</p>
 
       {error && <div className="error">No se pudo cargar desde el servidor: {error}. Revisa que el servidor esté corriendo (npm run dev en la carpeta raíz).</div>}
 

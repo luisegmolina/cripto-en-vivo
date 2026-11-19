@@ -54,6 +54,14 @@ const WS_URL = process.env.KALSHI_WS_URL || 'wss://external-api-ws.kalshi.com/tr
 const BRTI_INDEX_ID = 'BRTI';
 const IDLE_CLOSE_MS = 5 * 60 * 1000; // sin sondeo 5 min: cerrar la conexión
 const MAX_BACKOFF_MS = 60 * 1000;
+// v16.3 — Watchdog: si el WS se queda mudo (ni 'close' ni 'error'),
+// el estado no puede quedarse en "connected" con un tick viejo.
+// Sin tick válido en 10 s (o sin ningún tick 15 s tras conectar),
+// se termina el socket y se reconecta con el backoff existente.
+const WATCHDOG_MS = 10 * 1000;
+const WATCHDOG_CHECK_MS = 2 * 1000;
+const NO_TICK_GRACE_MS = 15 * 1000;
+let watchdogInterval = null;
 
 function numOrNull(v) {
   if (v == null || v === '') return null;
@@ -125,7 +133,52 @@ function wsAuthHeaders({ keyId, privateKeyPem }) {
 }
 
 // --- Una conexión por usuario conectado ---
-const connections = new Map(); // userId -> {ws, state, backoffMs, reconnectTimer, idleTimer, creds}
+const connections = new Map(); // userId -> {ws, state, backoffMs, reconnectTimer, idleTimer, creds, lastTickAt, connectedAt}
+
+// v16.3 — ¿Debe el watchdog reiniciar esta conexión? Función pura
+// (testeable sin red): true si el WS existe y lleva más de 10 s sin
+// tick válido, o si conectó hace más de 15 s sin recibir ningún tick.
+function debeReiniciarWatchdog(entry, ahoraMs = Date.now()) {
+  if (!entry || !entry.ws) return false;
+  if (entry.lastTickAt != null) return ahoraMs - entry.lastTickAt > WATCHDOG_MS;
+  if (entry.connectedAt != null) return ahoraMs - entry.connectedAt > NO_TICK_GRACE_MS;
+  return false;
+}
+
+// v16.3 — Una pasada del watchdog: termina los sockets mudos y los
+// reconecta con el backoff existente (el 'close' de terminate()
+// dispara scheduleReconnect). Se apaga solo cuando ya no hay conexiones.
+function revisarWatchdog(ahoraMs = Date.now()) {
+  if (connections.size === 0) {
+    if (watchdogInterval) { clearInterval(watchdogInterval); watchdogInterval = null; }
+    return;
+  }
+  for (const [userId, entry] of connections) {
+    if (!debeReiniciarWatchdog(entry, ahoraMs)) continue;
+    entry.state.status = 'error';
+    entry.state.error = 'Sin ticks BRTI en 10 s: reconectando…';
+    try { entry.ws && entry.ws.terminate(); } catch { /* ya cerrado */ }
+  }
+}
+
+function ensureWatchdog() {
+  if (watchdogInterval) return;
+  watchdogInterval = setInterval(() => revisarWatchdog(), WATCHDOG_CHECK_MS);
+  if (watchdogInterval.unref) watchdogInterval.unref();
+}
+
+// v16.3 — Estado visible: si el último tick tiene más de 10 s y el
+// estado aún dice "connected", se reporta "stale" en vez de mentir.
+// El watchdog (arriba) es el que termina y reconecta; esto solo evita
+// que el estado se quede en "connected" con un tick viejo entre
+// pasadas del watchdog.
+function estadoVisible(entry) {
+  const s = entry.state;
+  if (s.status === 'connected' && entry.lastTickAt != null && Date.now() - entry.lastTickAt > WATCHDOG_MS) {
+    return { ...s, status: 'stale' };
+  }
+  return s;
+}
 
 function freshState() {
   return { value: null, avg60s: null, avg15mFinal: null, updatedAt: null, status: 'connecting', error: null, lastPollAt: Date.now() };
@@ -166,6 +219,8 @@ function connectWs(userId, entry) {
   entry.ws = ws;
   ws.on('open', () => {
     entry.backoffMs = 1000;
+    entry.connectedAt = Date.now();
+    entry.lastTickAt = null;
     entry.state.status = 'connected';
     entry.state.error = null;
     try {
@@ -180,11 +235,15 @@ function connectWs(userId, entry) {
     if (!tick) return; // respuestas subscribed/indexlist/errores: se ignoran, no son ticks
     // v15.1: retener el último promedio conocido: un tick sin avg60s
     // no borra el anterior (mergeBrtiTick solo sobrescribe no-nulos).
+    entry.lastTickAt = Date.now();
     entry.state = { ...entry.state, ...mergeBrtiTick(entry.state, tick), lastPollAt: entry.state.lastPollAt };
   });
   ws.on('error', (e) => {
+    // v16.3: antes solo se ponía status 'error' sin reconectar; si
+    // luego no llegaba 'close', el WS quedaba muerto sin reintento.
     entry.state.status = 'error';
     entry.state.error = `WebSocket de Kalshi: ${e.message || e}`;
+    if (connections.has(userId)) scheduleReconnect(userId, entry);
   });
   ws.on('close', () => {
     entry.ws = null;
@@ -206,19 +265,21 @@ function ensureBrti(userId, creds) {
     entry.state.lastPollAt = Date.now();
     entry.creds = creds; // la clave pudo cambiar al reconectar
     if (!entry.ws && !entry.reconnectTimer) connectWs(userId, entry);
-    return entry.state;
+    ensureWatchdog();
+    return estadoVisible(entry);
   }
-  entry = { ws: null, state: freshState(), backoffMs: 1000, reconnectTimer: null, creds };
+  entry = { ws: null, state: freshState(), backoffMs: 1000, reconnectTimer: null, creds, lastTickAt: null, connectedAt: null };
   connections.set(userId, entry);
   connectWs(userId, entry);
-  return entry.state;
+  ensureWatchdog();
+  return estadoVisible(entry);
 }
 
 function getBrtiState(userId) {
   const entry = connections.get(userId);
   if (!entry) return null;
   entry.state.lastPollAt = Date.now();
-  return entry.state;
+  return estadoVisible(entry);
 }
 
 function stopBrti(userId) {
@@ -229,4 +290,11 @@ function stopBrti(userId) {
   try { entry.ws && entry.ws.close(); } catch { /* ya cerrado */ }
 }
 
-module.exports = { WS_URL, BRTI_INDEX_ID, parseCfBenchmarksMessage, mergeBrtiTick, wsAuthHeaders, ensureBrti, getBrtiState, stopBrti };
+module.exports = {
+  WS_URL, BRTI_INDEX_ID, WATCHDOG_MS,
+  parseCfBenchmarksMessage, mergeBrtiTick, wsAuthHeaders,
+  ensureBrti, getBrtiState, stopBrti,
+  debeReiniciarWatchdog, revisarWatchdog,
+  // Solo para pruebas: inspeccionar las conexiones en memoria.
+  _connections: connections,
+};

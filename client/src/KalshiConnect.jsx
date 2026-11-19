@@ -1,10 +1,13 @@
-// v12 — Conexión Kalshi SOLO LECTURA (ver posiciones reales, nunca operar).
+// v12 — Conexión Kalshi (ver posiciones reales; solo lectura MIENTRAS
+// el bot en vivo esté apagado; con live encendido y armado, §7 sí
+// puede operar).
 // Recibe {token, kalshiScore, kalshiVerdictKey, currentPrice, currency}.
 // La clave privada se envía UNA vez al servidor al conectar y se borra del
 // formulario; nunca se guarda en localStorage ni se muestra completa: tras
-// conectar solo se ve keyIdPreview. La app nunca compra, vende ni cierra
-// posiciones por el usuario: todo lo que hace es leer y sugerir, con la
-// misma lógica de ¿cobro o salgo? de la posición virtual (./kalshi.js).
+// conectar solo se ve keyIdPreview. Mientras el bot en vivo (§7) esté
+// apagado, la app nunca compra, vende ni cierra posiciones por el
+// usuario: todo lo que hace es leer y sugerir, con la misma lógica de
+// ¿cobro o salgo? de la posición virtual (./kalshi.js).
 // v13.3: la pestaña "Mi cuenta Kalshi" ya no existe: TODO vive aquí, en
 // una sola instancia dentro de la pestaña Kalshi, en este orden:
 //   §3 Mis posiciones de Kalshi (abiertas + cerradas)
@@ -146,7 +149,7 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
       setPrivateKey('');
       setFileName('');
       if (fileRef.current) fileRef.current.value = '';
-      setMsg(`✅ Kalshi conectado (${s.keyIdPreview || 'clave guardada'}). Solo lectura: la app nunca opera por ti.`);
+      setMsg(`✅ Kalshi conectado (${s.keyIdPreview || 'clave guardada'}). Solo lectura mientras el bot en vivo (§7) esté apagado: hoy no opera por ti.`);
       const p = await apiAuth('/api/kalshi/positions');
       setPositionsData(p);
     } catch (err) {
@@ -249,7 +252,7 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
         {fileName && <span className="muted">Archivo: {fileName} (el contenido no se muestra)</span>}
       </div>
       <div className="row">
-        <button type="submit" disabled={busy}>{busy ? 'Conectando…' : 'Conectar Kalshi (solo lectura)'}</button>
+        <button type="submit" disabled={busy}>{busy ? 'Conectando…' : 'Conectar Kalshi'}</button>
       </div>
       <p className="muted">Tu clave privada se envía cifrada al servidor y nunca se muestra completa: después de conectar solo verás el Key ID. No se guarda en este navegador.</p>
     </form>
@@ -288,7 +291,7 @@ export default function KalshiConnect({ token, kalshiScore, kalshiVerdictKey, cu
     <div>
       {/* v13.3 §3 — Mis posiciones de Kalshi (solo lectura). */}
       <h3>📡 Mis posiciones de Kalshi — solo lectura</h3>
-      <p className="warn">⚠️ SOLO LECTURA: esta app nunca compra, vende ni cierra posiciones por ti. Solo muestra tus posiciones reales de Kalshi y te sugiere, con la misma regla de la posición virtual, si cobrar o salir. Para operar tienes que hacerlo tú en Kalshi.</p>
+      <p className="warn">⚠️ Este panel es solo lectura: solo muestra tus posiciones reales de Kalshi y te sugiere, con la misma regla de la posición virtual, si cobrar o salir. El único que puede operar es el bot en vivo (§7), hoy apagado. Para operar a mano, hazlo tú en Kalshi.</p>
       {loading && <p className="muted">Comprobando conexión con Kalshi…</p>}
       {error && <p className="error">{error}</p>}
       {msg && <p className="muted">{msg}</p>}

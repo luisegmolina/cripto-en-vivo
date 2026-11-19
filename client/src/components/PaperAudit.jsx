@@ -41,10 +41,10 @@ export default function PaperAudit({ user, fmt }) {
     return () => { alive = false; stop(); };
   }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function accion(ruta, okMsg) {
+  async function accion(ruta, okMsg, body) {
     setBusy(true); setError(''); setMsg('');
     try {
-      const d = await apiAuth(ruta, { method: 'POST', body: {} });
+      const d = await apiAuth(ruta, { method: 'POST', body: body || {} });
       setData(d); setMsg(okMsg);
     } catch (e) { setError(String(e.message || e)); }
     finally { setBusy(false); }
@@ -130,9 +130,22 @@ export default function PaperAudit({ user, fmt }) {
         <button disabled={busy || !user || !data?.enabled} onClick={() => accion('/api/kalshi/paper-audit/stop', 'Auditor en papel detenido. Los resultados quedan guardados.')}>■ Detener</button>
       </div>
 
-      <h3>Últimas auditorías ({stats.ventanas})</h3>
+      <div className="row" style={{ marginTop: '8px' }}>
+        <label style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <input
+            type="checkbox"
+            checked={data?.autostart === true}
+            disabled={busy || !user || data?.kalshiConnected === false}
+            onChange={(e) => accion('/api/kalshi/paper-audit/autostart', e.target.checked ? 'Arranque automático activado: el auditor arrancará solo al reiniciar el servidor.' : 'Arranque automático desactivado: tras un reinicio tendrás que pulsar Iniciar.', { autostart: e.target.checked })}
+          />
+          Arranque automático al reiniciar el servidor
+        </label>
+      </div>
+      <p className="muted">El arranque automático solo afecta al auditor en papel: sin el interruptor global de live y sin armar el bot (§7), no sale ninguna orden.</p>
+
+      <h3>Últimas auditorías ({resultados.length})</h3>
       <p className="muted">
-        Ventanas: {stats.ventanas} · Señales en papel: {stats.senales} · Viables tras comisión: {stats.viables}
+        Historial total: {data?.historialTotal ?? stats.ventanas} ventanas · Señales en papel: {stats.senales} · Viables tras comisión: {stats.viables}
         {stats.viablesLiquidadas > 0 ? ` (aciertos en viables: ${stats.aciertosEnViables}/${stats.viablesLiquidadas})` : ''} · Acierto de la predicción local: {stats.prediccionCorrecta}/{stats.prediccionTotal}
         {stats.prediccionTotal > 0 ? ` (${Math.round((stats.prediccionCorrecta / stats.prediccionTotal) * 100)}%)` : ' (sin ventanas liquidadas todavía)'}
         {stats.errorMedioAbsUSD != null ? ` · Error |TWAP−Oficial| medio: $${fmtNum(stats.errorMedioAbsUSD)} (máx: $${fmtNum(stats.errorMaxAbsUSD)})` : ''}

@@ -1,12 +1,13 @@
 // AuthModal.jsx — v15.3: modal de entrar / crear cuenta (sin registro
 // obligatorio para ver precios y señales). La cuenta te deja conectar
-// tu Kalshi en solo lectura para ver el valor BRTI en vivo y tus
-// posiciones. Solo presenta: el envío y el estado viven en App.jsx.
+// tu Kalshi para ver el valor BRTI en vivo y tus posiciones (solo
+// lectura mientras el bot en vivo §7 esté apagado; hoy está apagado).
+// Solo presenta: el envío y el estado viven en App.jsx.
 export default function AuthModal({ showAuth, authName, onAuthName, authEmail, onAuthEmail, authPassword, onAuthPassword, authBusy, authError, onSubmit, onClose, onSwitchMode }) {
   return (
     <section className="card">
       <h2>{showAuth === 'register' ? 'Crear cuenta' : 'Entrar'}</h2>
-      <p className="muted">La cuenta te deja conectar tu Kalshi en solo lectura para ver el valor BRTI en vivo y tus posiciones. Ver la pantalla no necesita cuenta.</p>
+      <p className="muted">La cuenta te deja conectar tu Kalshi para ver el valor BRTI en vivo y tus posiciones (solo lectura mientras el bot en vivo §7 esté apagado; hoy está apagado). Ver la pantalla no necesita cuenta.</p>
       <form onSubmit={onSubmit}>
         <div className="row">
           {showAuth === 'register' && (

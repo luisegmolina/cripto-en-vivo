@@ -118,9 +118,9 @@ check('registro: TWAP 63010, predicción yes, error TWAP-oficial -2',
 check('stats: ventanas, señales, viables y acierto de predicción local',
   (() => {
     const s = calcularStats([
-      { simulacion: { viableDespuesDeComision: true }, prediccionLocal: 'yes', resultadoOficialKalshi: 'yes' },
+      { simulacion: { viableDespuesDeComision: true, direccionElegida: 'yes' }, prediccionLocal: 'yes', resultadoOficialKalshi: 'yes' },
       { simulacion: null, prediccionLocal: 'no', resultadoOficialKalshi: 'yes' },
-      { simulacion: { viableDespuesDeComision: false }, prediccionLocal: null, resultadoOficialKalshi: 'pendiente' },
+      { simulacion: { viableDespuesDeComision: false, direccionElegida: 'no' }, prediccionLocal: null, resultadoOficialKalshi: 'pendiente' },
     ]);
     return s.ventanas === 3 && s.senales === 2 && s.viables === 1 && s.prediccionCorrecta === 1 && s.prediccionTotal === 2;
   })());
@@ -153,6 +153,10 @@ const segAhora = Math.floor(ahora / 1000);
     brtiState: () => ({ value: 62900, avg60s: 62950, avg15mFinal: null, updatedAt: tickIso, status: 'connected', error: null }),
     quote: async () => ({ ticker: 'KXBTC15M-26NOV181430-T62757.41', status: 'active', result: null, expirationValue: null, yesAskDollars: 0.80, yesBidDollars: 0.79, noAskDollars: 0.20 }),
   });
+  // v16.3 (actualizado por diseño): el tick muestrea sin esperar a la
+  // quote; la señal se evalúa al llegar la quote (en paralelo). Se
+  // espera a que aterrice antes de afirmar.
+  await new Promise((r) => setTimeout(r, 10));
   check('tick en T-10 con 51 muestras registra señal NO viable (TWAP 62900 vs objetivo 63000)',
     est.simulacion && est.simulacion.direccionElegida === 'no' && est.simulacion.viableDespuesDeComision === true);
   check('tick guarda avg60s/avg15mFinal solo como diagnóstico, no como TWAP',
@@ -175,8 +179,8 @@ check('paperAuditor.js no contiene la ruta v1 /portfolio/orders',
   !paperAuditorSrc.includes('/trade-api/v2/portfolio/orders'));
 check('la única aparición de portfolio/events/orders en paperAuditor.js es la vista previa',
   (paperAuditorSrc.match(/portfolio\/events\/orders/g) || []).length === 1);
-check('routes.js no contiene ninguna ruta de órdenes ni fetch a Kalshi',
-  !routesSrc.includes('portfolio/orders') && !routesSrc.includes('portfolio/events/orders') && !routesSrc.includes('fetch('));
+check('routes.js no contiene ninguna ruta de órdenes ni fetch a Kalshi (actualizado por diseño en v16.3: el comentario de cabecera documenta la ruta, se ignoran los comentarios)',
+  (() => { const sinComentarios = routesSrc.replace(/\/\/.*$/gm, ''); return !sinComentarios.includes('portfolio/orders') && !sinComentarios.includes('portfolio/events/orders') && !sinComentarios.includes('fetch('); })());
 check('kalshiServer.js sigue solo lectura: READ_ONLY_PATHS intacto y sin POST',
   kalshiServerSrc.includes("'/trade-api/v2/portfolio/positions'") &&
   kalshiServerSrc.includes("'/trade-api/v2/portfolio/balance'") &&
@@ -191,9 +195,9 @@ check('routes.js expone GET /kalshi/paper-audit y POST start/stop con ensureBrti
 check('db.js y schema.sql admiten kind paper_audit (CHECK + migración DROP/ADD)',
   dbSrc.includes("'paper_audit'") && dbSrc.includes('DROP CONSTRAINT IF EXISTS cev_user_data_kind_check') &&
   schemaSql.includes("'paper_audit'"));
-check('App.jsx monta §6 PaperAudit después de ChartSection y antes de AccountBox, con VERSION_LABEL v16.2 (actualizado por diseño en v16.2)',
+check('App.jsx monta §6 PaperAudit después de ChartSection y antes de AccountBox, con VERSION_LABEL v16.3 (actualizado por diseño en v16.3)',
   app.includes("import PaperAudit from './components/PaperAudit.jsx'") &&
-  app.includes('const VERSION_LABEL = \'v16.2') &&
+  app.includes('const VERSION_LABEL = \'v16.3') &&
   app.indexOf('<PaperAudit user={user} fmt={fmt} />') > app.indexOf('<ChartSection') &&
   app.indexOf('<PaperAudit user={user} fmt={fmt} />') < app.indexOf('<AccountBox'));
 check('PaperAudit.jsx: §6, sondeo cada 2 s, botones Iniciar/Detener, tabla y aviso de papel solamente',
