@@ -332,3 +332,17 @@ footer {
   .row label { flex: 1 1 100%; }
   .row label input, .row label select { width: 100%; }
 }
+
+/* v18 — vista compacta solo §2 (/decision): una columna estrecha,
+   letras grandes, cabecera fija con la cuenta atrás. El titular
+   lleva font-size en línea en Decision.jsx: el !important lo supera. */
+.solo-decision { max-width: 640px; margin: 0 auto; }
+.solo-decision .solo-topbar { position: sticky; top: 0; z-index: 5; }
+.solo-decision .solo-card { margin-top: 12px; }
+.solo-decision .hero-headline { font-size: 34px !important; line-height: 1.15; }
+.solo-decision .bet-kpi b { font-size: 20px; }
+.solo-decision .bet-kpi span { font-size: 14px; }
+.solo-decision .verdict-meta { font-size: 15px; }
+.solo-decision .signal span { font-size: 15px; }
+.solo-footer { margin: 14px 0 24px; text-align: center; }
+.solo-footer a { font-size: 15px; }

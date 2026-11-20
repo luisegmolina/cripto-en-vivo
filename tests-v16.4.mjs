@@ -321,8 +321,8 @@ check('client/src/auth.js exporta saveToken para el login por huella',
   clientAuth.includes('export function saveToken'));
 
 console.log('v16.4 — 7. Versión, motor intacto, live sigue apagado');
-check("VERSION_LABEL es 'v17 — Papel sin límites, sombra libre' (actualizado por diseño en v17)",
-  appJsx.includes("const VERSION_LABEL = 'v17 — Papel sin límites, sombra libre';"));
+check("VERSION_LABEL es 'v18 — Decisión compacta (solo §2)' (actualizado por diseño en v18)",
+  appJsx.includes("const VERSION_LABEL = 'v18 — Decisión compacta (solo §2)';"));
 check('VERSION.txt documenta la Parte 1 (WebAuthn, rpID, challenges, Parte 2 pendiente)',
   versionTxt.includes('v16.4 — Entrada biométrica') && versionTxt.includes('cripto-en-vivo.onrender.com')
   && versionTxt.includes('Challenges de un solo uso') && versionTxt.includes('Parte 2'));

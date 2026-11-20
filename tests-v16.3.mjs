@@ -373,8 +373,8 @@ check('paperAuditor.js no lee la env LIVE_TRADING_ENABLED en código (solo la me
   !auditorSrc.includes('process.env.LIVE_TRADING_ENABLED') && auditorSrc.includes('// EN PAPEL; sin la env LIVE_TRADING_ENABLED y sin armar, no sale'));
 check('live sigue APAGADO por defecto (isLiveEnabled false sin la env)',
   trader.isLiveEnabled() === false);
-check("VERSION_LABEL es 'v17 — Papel sin límites, sombra libre' (actualizado por diseño en v17)",
-  app.includes("const VERSION_LABEL = 'v17 — Papel sin límites, sombra libre';"));
+check("VERSION_LABEL es 'v18 — Decisión compacta (solo §2)' (actualizado por diseño en v18)",
+  app.includes("const VERSION_LABEL = 'v18 — Decisión compacta (solo §2)';"));
 check('VERSION.txt documenta la v16.3 con sus 7 puntos',
   versionTxt.includes('v16.3 — Arranque auto + watchdog + historial') && versionTxt.includes('Arranque automático') && versionTxt.includes('Watchdog'));
 

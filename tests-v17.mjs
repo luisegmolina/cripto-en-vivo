@@ -370,10 +370,10 @@ console.log('v17 — (g) Con live apagado el espejo es would-send sin red');
 }
 
 console.log('v17 — Versión, cliente y motor intacto');
-check("VERSION_LABEL es 'v17 — Papel sin límites, sombra libre'",
-  app.includes("const VERSION_LABEL = 'v17 — Papel sin límites, sombra libre';"));
-check('VERSION.txt empieza en v17 y corrige v16.10 (5a9aa479) como DESPLEGADA',
-  versionTxt.startsWith('v17')
+check("VERSION_LABEL es 'v18 — Decisión compacta (solo §2)' (v18 por diseño)",
+  app.includes("const VERSION_LABEL = 'v18 — Decisión compacta (solo §2)';"));
+check('VERSION.txt empieza en v18 y corrige v16.10 (5a9aa479) como DESPLEGADA (v18 por diseño)',
+  versionTxt.startsWith('v18')
   && versionTxt.includes('v16.10 — Evaluar toda la ventana, sin salida por lock roto (18-nov-2026) — DESPLEGADA en Render (commit 5a9aa479)'));
 check('PaperTrader.jsx (§6) ya no habla de tope de 5: sin max_entradas_dia, sin sin_reentrada, sin "Entradas hoy (máx. 5)" ni "/ 5" (las menciones en comentarios no cuentan)',
   !sinComentarios(paperTraderJsx).includes('max_entradas_dia') && !sinComentarios(paperTraderJsx).includes('sin_reentrada')

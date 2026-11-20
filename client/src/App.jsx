@@ -22,10 +22,11 @@ import AccountBox from './components/AccountBox.jsx';
 import AuthModal from './components/AuthModal.jsx';
 import SiteGate from './components/SiteGate.jsx';
 import { siteGateStatus, onSiteGateLocked, emitSiteGateLocked } from './siteGate.js';
+import { isDecisionSoloView, DECISION_SOLO_MANIFEST } from './soloView.js';
 
 const CUR = { USD: '$', EUR: '€', GBP: '£' };
 const START_CASH = 10000;
-const VERSION_LABEL = 'v17 — Papel sin límites, sombra libre';
+const VERSION_LABEL = 'v18 — Decisión compacta (solo §2)';
 
 function visibleInterval(fn, ms) {
   const t = setInterval(() => { if (!document.hidden) fn(); }, ms);
@@ -119,6 +120,10 @@ export default function App() {
   const [token, setTokenState] = useState(() => getToken());
   const [user, setUser] = useState(null);
   const [view, setView] = useState(() => (typeof window !== 'undefined' && window.location.hash === '#admin' ? 'admin' : 'app'));
+  // v18 — vista compacta solo §2 (/decision o ?vista=decision): solo el
+  // apartado Decisión, en letras grandes, para el celular mientras se
+  // apuesta en Kalshi. No cambia nada del resto de la app.
+  const soloDecision = typeof window !== 'undefined' ? isDecisionSoloView(window.location.pathname, window.location.search) : false;
   const [showAuth, setShowAuth] = useState(null);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -160,6 +165,17 @@ export default function App() {
   // puso en otro dispositivo mientras esta pestaña estaba abierta),
   // muestra la pantalla SiteGate en vez de romper.
   useEffect(() => onSiteGateLocked(() => setGateState('locked')), []);
+
+  // v18 — en la vista solo §2, el título y el manifiesto son los de
+  // "Decisión": al agregarla a la pantalla principal del celular, el
+  // icono abre directo en /decision (no en la app completa). El
+  // manifiesto principal sigue siendo el de la app completa.
+  useEffect(() => {
+    if (!soloDecision) return;
+    document.title = 'Decisión — Cripto en Vivo';
+    const link = document.querySelector('link[rel="manifest"]');
+    if (link) link.setAttribute('href', DECISION_SOLO_MANIFEST);
+  }, [soloDecision]);
 
   // v16.5 — tras verify OK el servidor ya puso la cookie de puerta en
   // este navegador: confiar en el verify, no re-preguntar el status.
@@ -676,6 +692,48 @@ export default function App() {
     return (
       <div className="app">
         <section className="card"><p className="muted">Comprobando el acceso al sitio…</p></section>
+      </div>
+    );
+  }
+
+  // v18 — vista compacta solo §2: solo Decisión + cuenta atrás, en
+  // letras grandes. Misma señal y misma decisión que la app completa
+  // (mismo sondeo BRTI/mercado/posiciones: nada se recalcula aparte).
+  // Sin sesión muestra la apuesta recomendada; con sesión y posición
+  // abierta en Kalshi muestra SAL AHORA / AGUANTA / INVIERTE MÁS.
+  if (soloDecision) {
+    return (
+      <div className="app solo-decision">
+        <header className="topbar solo-topbar">
+          <div className="brand-row"><h1>₿ Decisión</h1><span className="version-pill">{VERSION_LABEL}</span></div>
+          <div className="window-pill">
+            <span className="muted">Cierre 15m:</span>
+            <b className="countdown">{fmtCountdown(kalshiWin.remainingMs)}</b>
+          </div>
+          <div className="row">
+            {!user ? (
+              <button onClick={() => { setShowAuth('login'); setAuthError(''); }}>Entrar</button>
+            ) : (
+              <>
+                <span className="badge">👤 {user.name || user.email}</span>
+                <button onClick={handleLogout}>Salir</button>
+              </>
+            )}
+          </div>
+        </header>
+
+        {showAuth && (
+          <AuthModal showAuth={showAuth} authName={authName} onAuthName={setAuthName} authEmail={authEmail} onAuthEmail={setAuthEmail} authPassword={authPassword} onAuthPassword={setAuthPassword} authBusy={authBusy} authError={authError} onSubmit={handleAuthSubmit} onClose={() => setShowAuth(null)} onSwitchMode={(m) => { setShowAuth(m); setAuthError(''); }} webauthnAvailable={webauthnAvailable} onWebauthnLogin={handleWebauthnLogin} webauthnBusy={webauthnBusy} webauthnError={webauthnError} />
+        )}
+
+        <section className="card solo-card" aria-label="Decisión y apuesta recomendada">
+          <Decision user={user} firstRealDecision={firstRealDecision} liveDecisionNow={liveDecisionNow} marketRec={marketRec} kalshiScore={kalshiScore} kalshiReasons={kalshiReasons} marketMovement={marketMovement} betPlan={betPlan} />
+        </section>
+
+        <footer className="solo-footer">
+          <a href="/">Ver app completa</a>
+          <span className="muted"> · Se actualiza sola · Sugerencia educativa, no es una orden.</span>
+        </footer>
       </div>
     );
   }

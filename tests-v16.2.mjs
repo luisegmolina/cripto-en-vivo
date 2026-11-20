@@ -245,7 +245,7 @@ check('db.js y schema.sql admiten kind live_trade_log (CHECK + migración DROP/A
   schemaSql.includes("'live_trade_log'"));
 check('App.jsx monta §7 LiveTrader después de PaperAudit y antes de AccountBox, con VERSION_LABEL v17 (actualizado por diseño en v17)',
   app.includes("import LiveTrader from './components/LiveTrader.jsx'") &&
-  app.includes("const VERSION_LABEL = 'v17") &&
+  app.includes("const VERSION_LABEL = 'v18") &&
   app.indexOf('<LiveTrader user={user} fmt={fmt} />') > app.indexOf('<PaperAudit user={user} fmt={fmt} />') &&
   app.indexOf('<LiveTrader user={user} fmt={fmt} />') < app.indexOf('<AccountBox'));
 check('LiveTrader.jsx: §7 con título dinámico según live/armed/killed (v16.7, ya no hay título fijo "APAGADO"), sondeo status cada 2 s, botón Detener (kill), Armar deshabilitado sin live',

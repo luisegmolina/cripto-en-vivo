@@ -130,7 +130,7 @@ if (bundleMatch) {
   check('bundle distinto al de v15.2 (index-DxgRBFRC.js)', bundleMatch[1] !== 'index-DxgRBFRC.js');
   // v17: la etiqueta de versión del bundle avanzó a v17; el check
   // busca la etiqueta actual, no la vieja.
-  check('bundle trae la etiqueta de versión actual (v17)', bundle.includes('v17'));
+  check('bundle trae la etiqueta de versión actual (v18)', bundle.includes('v18'));
   check('bundle trae "Apuesta a la SUBIDA" y "Apuesta a la BAJADA"',
     bundle.includes('Apuesta a la SUBIDA') && bundle.includes('Apuesta a la BAJADA'));
   check('bundle trae el orden nuevo (1 · Mi posición)', bundle.includes('1 · Mi posición en vivo'));

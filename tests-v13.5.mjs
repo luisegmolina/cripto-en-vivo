@@ -132,7 +132,7 @@ check('App.jsx muestra "BRTI ahora" (v15)', app.includes('BRTI ahora'));
 check('App.jsx muestra aviso de fallback a Coinbase si no hay BRTI (v15: Sin valor en vivo de Kalshi)', app.includes('Sin valor en vivo de Kalshi') && app.includes('Precio de Coinbase ahora:'));
 check('App.jsx usa brtiPositionOutcome (promedio 60 s) para GANANDO/PERDIENDO (v15)', app.includes('brtiPositionOutcome'));
 check('kalshi.js documenta que Pyth NO liquida KXBTC15M', src('client/src/kalshi.js').includes('Pyth NO liquida'));
-check('VERSION.txt dice v17', src('VERSION.txt').startsWith('v17'));
+check('VERSION.txt dice v18', src('VERSION.txt').startsWith('v18'));
 check('README menciona v13.5 y BRTI', src('README.md').includes('v13.5') && src('README.md').includes('BRTI'));
 
 // --- 6. Bundle compilado ---
